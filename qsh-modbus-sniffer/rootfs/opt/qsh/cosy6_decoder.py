@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QSH Modbus Passive Sniffer v3 — Home Assistant Add-on
+QSH Modbus Passive Sniffer v4 — Home Assistant Add-on
 ======================================================
 
 Connects to Waveshare RS485-to-WiFi gateway in transparent mode.
@@ -8,12 +8,14 @@ Passively captures ALL Modbus RTU traffic between Cosy Hub (master)
 and outdoor unit (slave address 10).
 
 Features:
+    - Scanning frame parser: extracts multiple frames from concatenated TCP chunks
     - Robust socket reconnection with exponential backoff
-    - MQTT auto-discovery for Home Assistant
+    - MQTT auto-discovery for Home Assistant (with LWT availability)
     - CSV logging of all parsed frames
-    - JSON register map (auto-updated when new registers seen)
-    - Operating state detection (ACTIVE / IDLE / HEARTBEAT)
+    - JSON register map with min/max/sample tracking
+    - Register-based operating state detection (HEATING/DEFROST/DHW/OFF/...)
     - Signed int16 handling for temperature-range registers
+    - Request/response pairing via pair_response()
 
 Bus parameters: 19200 baud, 8N1, Slave address 10 (0x0A)
 Polling cycle (when active):
@@ -236,41 +238,71 @@ class ModbusFrame:
                 self.register_count = struct.unpack('>H', data[2:4])[0]
             elif len(data) >= 1:
                 self.is_request = False
-                byte_count = data[0]
-                reg_data = data[1:1 + byte_count]
-                num_regs = byte_count // 2
-                for i in range(num_regs):
-                    val = struct.unpack('>H', reg_data[i*2:(i+1)*2])[0]
-                    self.registers[i] = val  # Offset from 0 — paired with request for absolute addr
+                reg_data = data[1:1 + data[0]]
+                self._response_words = [
+                    struct.unpack('>H', reg_data[i:i+2])[0]
+                    for i in range(0, len(reg_data) - 1, 2)
+                ]
+
+        elif fc == 0x05:
+            # Write Single Coil
+            if len(data) == 4:
+                self.is_request = True
+                self.start_register = struct.unpack('>H', data[0:2])[0]
+                self.coils[self.start_register] = (struct.unpack('>H', data[2:4])[0] == 0xFF00)
 
         elif fc == 0x06:
             # Write Single Register
             if len(data) == 4:
                 self.is_request = True
-                reg = struct.unpack('>H', data[0:2])[0]
-                val = struct.unpack('>H', data[2:4])[0]
-                self.start_register = reg
-                self.register_count = 1
-                self.registers[reg] = val
+                self.start_register = struct.unpack('>H', data[0:2])[0]
+                self.registers[self.start_register] = struct.unpack('>H', data[2:4])[0]
+
+        elif fc == 0x0F:
+            # Write Multiple Coils
+            if len(data) >= 5:
+                self.is_request = True
+                self.start_register = struct.unpack('>H', data[0:2])[0]
+                coil_count = struct.unpack('>H', data[2:4])[0]
+                coil_data = data[5:5 + data[4]]
+                for i in range(coil_count):
+                    byte_idx, bit_idx = i // 8, i % 8
+                    if byte_idx < len(coil_data):
+                        self.coils[self.start_register + i] = bool(coil_data[byte_idx] & (1 << bit_idx))
 
         elif fc == 0x10:
             # Write Multiple Registers
-            if len(data) >= 5 and len(data) > 5:
+            if len(data) >= 5:
                 # REQUEST: start(2) + count(2) + bytes(1) + data
                 self.is_request = True
                 self.start_register = struct.unpack('>H', data[0:2])[0]
                 self.register_count = struct.unpack('>H', data[2:4])[0]
-                byte_count = data[4]
-                reg_data = data[5:5 + byte_count]
                 for i in range(self.register_count):
-                    if (i*2 + 2) <= len(reg_data):
-                        val = struct.unpack('>H', reg_data[i*2:(i+1)*2])[0]
-                        self.registers[self.start_register + i] = val
+                    offset = 5 + i * 2
+                    if offset + 1 < len(data):
+                        self.registers[self.start_register + i] = struct.unpack('>H', data[offset:offset+2])[0]
             elif len(data) == 4:
                 # RESPONSE: start(2) + count(2) — echo
                 self.is_request = False
                 self.start_register = struct.unpack('>H', data[0:2])[0]
                 self.register_count = struct.unpack('>H', data[2:4])[0]
+
+    def pair_response(self, request):
+        """Map response data to absolute register addresses using the paired request."""
+        if not request.is_request or request.function_code != self.function_code:
+            return
+        if self.function_code in (0x03, 0x04) and hasattr(self, '_response_words'):
+            for i, value in enumerate(self._response_words):
+                self.registers[request.start_register + i] = value
+            self.start_register = request.start_register
+            self.register_count = request.register_count
+        elif self.function_code in (0x01, 0x02) and hasattr(self, '_coil_bytes'):
+            for i in range(request.register_count):
+                byte_idx, bit_idx = i // 8, i % 8
+                if byte_idx < len(self._coil_bytes):
+                    self.coils[request.start_register + i] = bool(self._coil_bytes[byte_idx] & (1 << bit_idx))
+            self.start_register = request.start_register
+            self.register_count = request.register_count
 
 
 # =============================================================================
@@ -282,57 +314,104 @@ class RegisterTracker:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.map_file = self.log_dir / "register_map.json"
-        self.current_values = {}     # {reg_num: raw_uint16}
+        self.seen_registers = {}
+        self.seen_coils = {}
+        self.seen_function_codes = {}
+        self.current_values = {}
         self.current_coils = {}
-        self.seen_registers = set()
-        self.seen_coils = set()
+        self.write_registers = {}
         self.lock = Lock()
         self._load_map()
 
     def _load_map(self):
         if self.map_file.exists():
             try:
-                data = json.loads(self.map_file.read_text())
-                self.seen_registers = set(int(k) for k in data.get("registers", {}).keys())
-                self.seen_coils = set(int(k) for k in data.get("coils", {}).keys())
-                logging.info(f"Loaded register map: {len(self.seen_registers)} regs, {len(self.seen_coils)} coils")
+                with open(self.map_file) as f:
+                    saved = json.load(f)
+                self.seen_registers = saved.get("registers", {})
+                self.seen_coils = saved.get("coils", {})
+                self.seen_function_codes = saved.get("function_codes", {})
+                self.write_registers = saved.get("write_registers", {})
+                logging.info(f"Loaded map: {len(self.seen_registers)} regs, {len(self.seen_coils)} coils")
             except Exception as e:
                 logging.warning(f"Failed to load register map: {e}")
 
     def save_map(self):
-        data = {
-            "registers": {str(r): {"name": REGISTER_NAMES.get(r, {}).get("name", f"reg_{r}")}
-                         for r in sorted(self.seen_registers)},
-            "coils": {str(c): {} for c in sorted(self.seen_coils)},
-            "updated": datetime.now(timezone.utc).isoformat(),
-        }
+        with self.lock:
+            data = {
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+                "registers": self.seen_registers,
+                "coils": self.seen_coils,
+                "function_codes": self.seen_function_codes,
+                "write_registers": self.write_registers,
+            }
         try:
-            self.map_file.write_text(json.dumps(data, indent=2))
+            with open(self.map_file, 'w') as f:
+                json.dump(data, f, indent=2)
         except Exception as e:
             logging.error(f"Failed to save register map: {e}")
 
-    def update_registers(self, registers: dict, is_write: bool = False):
-        new_discoveries = 0
-        with self.lock:
-            for reg_num, raw_val in registers.items():
-                self.current_values[reg_num] = raw_val
-                if reg_num not in self.seen_registers:
-                    self.seen_registers.add(reg_num)
-                    new_discoveries += 1
-                    name = REGISTER_NAMES.get(reg_num, {}).get("name", f"reg_{reg_num}")
-                    logging.info(f"🔍 NEW register discovered: {reg_num} ({name}) = {raw_val}")
-        return new_discoveries
+    def update_from_frame(self, frame: ModbusFrame) -> list:
+        """Update tracker from a parsed frame. Returns list of discovery strings."""
+        discoveries = []
+        now_iso = frame.dt.isoformat()
 
-    def update_coils(self, coils: dict):
         with self.lock:
-            discoveries = 0
-            for coil_num, val in coils.items():
-                self.current_coils[coil_num] = val
-                if coil_num not in self.seen_coils:
-                    self.seen_coils.add(coil_num)
-                    discoveries += 1
-                    logging.info(f"🔍 NEW coil discovered: {coil_num} = {val}")
-            return discoveries
+            # Track function codes
+            fc_key = str(frame.function_code)
+            if fc_key not in self.seen_function_codes:
+                fc_name = FUNCTION_CODES.get(frame.function_code, "UNKNOWN")
+                self.seen_function_codes[fc_key] = {"name": fc_name, "first_seen": now_iso, "count": 0}
+                discoveries.append(f"NEW FC: 0x{frame.function_code:02X} ({fc_name})")
+            self.seen_function_codes[fc_key]["count"] = self.seen_function_codes[fc_key].get("count", 0) + 1
+
+            # Track registers
+            is_write = frame.function_code in (0x06, 0x10)
+            for reg, value in frame.registers.items():
+                reg_key = str(reg)
+                self.current_values[reg] = value
+                signed_val = to_signed(value) if reg in SIGNED_REGISTERS else value
+
+                if reg_key not in self.seen_registers:
+                    self.seen_registers[reg_key] = {
+                        "first_seen": now_iso, "last_seen": now_iso,
+                        "min_raw": value, "max_raw": value,
+                        "min_signed": signed_val, "max_signed": signed_val,
+                        "sample_count": 0, "is_written": is_write, "fc_seen": [],
+                    }
+                    discoveries.append(f"NEW REG: {reg} = {value} (signed: {signed_val})")
+
+                e = self.seen_registers[reg_key]
+                e["last_seen"] = now_iso
+                e["min_raw"] = min(e.get("min_raw", value), value)
+                e["max_raw"] = max(e.get("max_raw", value), value)
+                e["min_signed"] = min(e.get("min_signed", signed_val), signed_val)
+                e["max_signed"] = max(e.get("max_signed", signed_val), signed_val)
+                e["sample_count"] = e.get("sample_count", 0) + 1
+                e["latest_raw"] = value
+                e["latest_signed"] = signed_val
+                fc_str = f"0x{frame.function_code:02X}"
+                if fc_str not in e.get("fc_seen", []):
+                    e.setdefault("fc_seen", []).append(fc_str)
+                if is_write:
+                    self.write_registers[reg_key] = {"last_written": now_iso, "last_value": value}
+                    e["is_written"] = True
+
+            # Track coils
+            for coil, value in frame.coils.items():
+                coil_key = str(coil)
+                self.current_coils[coil] = value
+                if coil_key not in self.seen_coils:
+                    self.seen_coils[coil_key] = {"first_seen": now_iso, "sample_count": 0, "values_seen": []}
+                    discoveries.append(f"NEW COIL: {coil} = {value}")
+                e = self.seen_coils[coil_key]
+                e["last_seen"] = now_iso
+                e["sample_count"] = e.get("sample_count", 0) + 1
+                e["latest_value"] = value
+                if value not in e.get("values_seen", []):
+                    e["values_seen"].append(value)
+
+        return discoveries
 
 
 # =============================================================================
@@ -340,39 +419,61 @@ class RegisterTracker:
 # =============================================================================
 
 class OperatingStateDetector:
-    """Detect whether the heat pump is actively running or in idle/heartbeat mode."""
+    """Detect heat pump operating state from register values."""
 
     def __init__(self):
         self.current_state = "UNKNOWN"
-        self.last_read_time = 0
-        self.last_write_time = 0
+        self.state_history = []
+        self.state_entered_at = time.time()
         self.transitions = 0
 
-    def update(self, frame: ModbusFrame):
-        now = frame.timestamp
-        old_state = self.current_state
+    def update(self, registers: dict, timestamp: float) -> str:
+        """Update state from current register values. Returns new state name on transition, else None."""
+        prev_state = self.current_state
 
-        if frame.function_code == 0x03:  # Read holding registers
-            if frame.is_request and frame.start_register == 19:
-                self.last_read_time = now
+        r19 = registers.get(19, 0)
+        r25 = registers.get(25, 0)
+        r29 = to_signed(registers.get(29, 0))
+        r30 = to_signed(registers.get(30, 0))
+        r57 = to_signed(registers.get(57, 0))
+        r92 = registers.get(92, 0)
+        delta = r29 - r30
 
-        elif frame.function_code == 0x10:  # Write multiple registers
-            self.last_write_time = now
-
-        # If we've seen a read poll recently, system is active
-        if (now - self.last_read_time) < 10:
-            new_state = "ACTIVE"
-        elif (now - self.last_write_time) < 10:
-            new_state = "HEARTBEAT"
+        if r19 == 0 and r25 == 0:
+            new_state = "OFF"
+        elif delta < 0 and r19 > 0:
+            new_state = "DEFROST"
+        elif r92 == 4 and r19 > 0:
+            new_state = "DHW"
+        elif r92 == 2 and r19 > 0:
+            new_state = "HEATING"
+        elif r92 == 2 and r19 == 0:
+            new_state = "HEATING_IDLE"
+        elif r19 > 0 and r19 < 15:
+            new_state = "OIL_RECOVERY"
+        elif r19 > 0:
+            new_state = "ACTIVE_UNKNOWN"
         else:
-            new_state = "IDLE"
+            new_state = "UNKNOWN"
 
-        if new_state != old_state:
+        if new_state != prev_state:
+            duration = timestamp - self.state_entered_at
+            self.state_history.append({
+                "from": prev_state, "to": new_state,
+                "timestamp": timestamp, "duration_s": round(duration, 1),
+                "trigger_registers": {
+                    "reg_19": r19, "reg_25": r25, "reg_29": r29,
+                    "reg_30": r30, "delta": round(delta, 1),
+                    "reg_57": r57, "reg_92": r92,
+                }
+            })
+            self.state_entered_at = timestamp
             self.current_state = new_state
             self.transitions += 1
-            logging.info(f"⚡ State: {old_state} → {new_state}")
+            return new_state
 
-        return self.current_state
+        self.current_state = new_state
+        return None
 
 
 # =============================================================================
@@ -413,6 +514,8 @@ class MQTTPublisher:
             self.client.publish(f"{self.base_topic}/status", "online", retain=True)
             # Re-send discovery on reconnect
             self.discovery_sent.clear()
+            # Publish operating state discovery
+            self._send_discovery_custom("operating_state", "Modbus Operating State", "", "mdi:state-machine", None)
         else:
             logging.error(f"MQTT connect failed: rc={rc}")
 
@@ -421,16 +524,48 @@ class MQTTPublisher:
         if rc != 0:
             logging.warning(f"MQTT disconnected unexpectedly: rc={rc}")
 
+    def _send_discovery_custom(self, sensor_id, name, unit, icon, device_class):
+        """Send MQTT discovery for a custom (non-register) sensor."""
+        if not self.client or sensor_id in self.discovery_sent:
+            return
+        payload = {
+            "name": name,
+            "state_topic": f"{self.base_topic}/{sensor_id}",
+            "unique_id": f"qsh_modbus_{sensor_id}",
+            "device": {
+                "identifiers": ["qsh_modbus_sniffer"],
+                "name": "QSH Modbus Sniffer",
+                "manufacturer": "QSH",
+                "model": "Cosy 6 Passive Sniffer",
+                "sw_version": "4.0.0",
+            },
+            "availability": {
+                "topic": f"{self.base_topic}/status",
+            },
+        }
+        if unit:
+            payload["unit_of_measurement"] = unit
+        if icon:
+            payload["icon"] = icon
+        if device_class:
+            payload["device_class"] = device_class
+            payload["state_class"] = "measurement"
+        self.client.publish(
+            f"homeassistant/sensor/qsh_modbus/{sensor_id}/config",
+            json.dumps(payload), retain=True
+        )
+        self.discovery_sent.add(sensor_id)
+
     def _send_discovery(self, reg_num: int):
+        """Send MQTT discovery for a register sensor."""
         if reg_num in self.discovery_sent or not self.connected:
             return
 
         info = REGISTER_NAMES.get(reg_num, {})
         name = info.get("name", f"Modbus Reg {reg_num}")
         unit = info.get("unit", "")
-        icon = info.get("icon", "mdi:register-outline" if not info else None)
+        icon = info.get("icon", "mdi:numeric" if not info else None)
         device_class = info.get("class")
-        scale = info.get("scale", 1)
 
         uid = f"qsh_modbus_reg_{reg_num}"
         state_topic = f"{self.base_topic}/reg_{reg_num}/state"
@@ -444,7 +579,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "3.0.0",
+                "sw_version": "4.0.0",
             },
             "availability": {
                 "topic": f"{self.base_topic}/status",
@@ -484,8 +619,20 @@ class MQTTPublisher:
             state_topic = f"{self.base_topic}/reg_{reg_num}/state"
             self.client.publish(state_topic, str(val), retain=True)
 
+        # Publish coils
+        for coil, value in coils.items():
+            sensor_id = f"coil_{coil}"
+            if sensor_id not in self.discovery_sent:
+                self._send_discovery_custom(sensor_id, f"Modbus Coil {coil}", "", "mdi:toggle-switch", None)
+            self.client.publish(f"{self.base_topic}/coil_{coil}", "ON" if value else "OFF", retain=True)
+
         # Publish operating state
-        self.client.publish(f"{self.base_topic}/state", state, retain=True)
+        if state:
+            self.client.publish(f"{self.base_topic}/operating_state", state, retain=True)
+
+    def publish_state_transition(self, transition: dict):
+        if self.connected and self.client:
+            self.client.publish(f"{self.base_topic}/state_transition", json.dumps(transition))
 
     def stop(self):
         if self.client:
@@ -526,41 +673,27 @@ class CSVLogger:
                 ])
             self.current_date = today
 
-    def log_frame(self, frame: ModbusFrame, operating_state: str, paired_start: int = None, paired_count: int = None):
+    def log_frame(self, frame: ModbusFrame, operating_state: str):
         self._open_file()
 
         direction = "REQUEST" if frame.is_request else "RESPONSE"
         fc_name = FUNCTION_CODES.get(frame.function_code, f"0x{frame.function_code:02X}")
 
-        # For responses to read requests, map register offsets to absolute addresses
-        abs_regs = {}
-        if frame.registers:
-            if frame.is_request is False and paired_start is not None:
-                for offset, val in frame.registers.items():
-                    abs_regs[paired_start + offset] = {
-                        "raw": val,
-                        "val": to_signed(val) if (paired_start + offset) in SIGNED_REGISTERS else val,
-                    }
-            else:
-                for reg, val in frame.registers.items():
-                    abs_regs[reg] = {
-                        "raw": val,
-                        "val": to_signed(val) if reg in SIGNED_REGISTERS else val,
-                    }
-
-        start = frame.start_register if frame.start_register is not None else (paired_start or "")
-        count = frame.register_count if frame.register_count is not None else (paired_count or "")
+        reg_data = {}
+        for reg, raw_val in frame.registers.items():
+            signed_val = to_signed(raw_val) if reg in SIGNED_REGISTERS else raw_val
+            reg_data[str(reg)] = {"raw": raw_val, "val": signed_val}
 
         self.writer.writerow([
-            frame.timestamp,
+            f"{frame.timestamp:.3f}",
             frame.dt.isoformat(),
             direction,
             frame.address,
-            f"0x{frame.function_code:02X}",
+            f"0x{frame.function_code:02X}" if frame.function_code else "",
             fc_name,
-            start,
-            count,
-            json.dumps(abs_regs) if abs_regs else "",
+            frame.start_register,
+            frame.register_count,
+            json.dumps(reg_data) if reg_data else "",
             json.dumps({str(k): v for k, v in frame.coils.items()}) if frame.coils else "",
             frame.valid_crc,
             frame.raw.hex(),
@@ -627,7 +760,7 @@ class ModbusSniffer:
                 self.pending_request = None
                 self.consecutive_failures = 0
                 self.stats["reconnects"] += 1
-                logging.info(f"✅ Connected to gateway {self.config['gateway_host']}:{self.config['gateway_port']}")
+                logging.info(f"Connected to gateway {self.config['gateway_host']}:{self.config['gateway_port']}")
                 return True
             except Exception as e:
                 logging.error(f"Connection failed: {e} — retrying in {delay}s")
@@ -638,7 +771,7 @@ class ModbusSniffer:
     def run(self):
         self.running = True
         logging.info("=" * 60)
-        logging.info("QSH MODBUS SNIFFER v3 — HA ADD-ON")
+        logging.info("QSH MODBUS SNIFFER v4 — HA ADD-ON")
         logging.info(f"  Gateway: {self.config['gateway_host']}:{self.config['gateway_port']}")
         logging.info(f"  Slave: {self.config['slave_address']}")
         logging.info(f"  Log dir: {self.config['log_dir']}")
@@ -696,77 +829,80 @@ class ModbusSniffer:
                 self._try_parse_frame(now)
             self.buffer.append(byte)
             self.last_byte_time = now
+        # Eagerly scan for complete frames in the buffer (handles TCP concatenation)
+        if len(self.buffer) >= 5:
+            self._try_parse_frame(now)
 
     def _try_parse_frame(self, now: float):
+        """Scanning parser: extract valid Modbus frames from buffer by CRC probing."""
         if len(self.buffer) < 4:
             self.buffer.clear()
             return
 
         raw = bytes(self.buffer)
         self.buffer.clear()
-        self.stats["frames_total"] += 1
 
-        frame = ModbusFrame(raw, now)
+        offset = 0
+        while offset < len(raw) - 3:
+            # Look for a byte that could be a valid slave address
+            if raw[offset] not in (self.config["slave_address"], 0x00):
+                offset += 1
+                continue
+            frame_parsed = False
+            # Try increasing frame lengths until we find a valid CRC
+            for end in range(offset + 4, min(offset + 260, len(raw) + 1)):
+                candidate = raw[offset:end]
+                if verify_crc(candidate):
+                    frame = ModbusFrame(candidate, now)
+                    self._handle_frame(frame)
+                    offset = end
+                    frame_parsed = True
+                    break
+            if not frame_parsed:
+                offset += 1
+
+    def _handle_frame(self, frame: ModbusFrame):
+        """Process a single validated Modbus frame."""
+        self.stats["frames_total"] += 1
         if not frame.valid_crc:
             self.stats["frames_invalid"] += 1
             return
-
         self.stats["frames_valid"] += 1
 
-        if frame.address != self.config["slave_address"]:
-            return
-
-        # State detection
-        state = self.state_detector.update(frame)
-        if self.state_detector.transitions > self.stats["state_transitions"]:
-            self.stats["state_transitions"] = self.state_detector.transitions
-
-        # Pair request/response
         if frame.is_request:
             self.stats["requests"] += 1
-
-            # Write requests contain register data directly
-            if frame.function_code == 0x10 and frame.registers:
-                self.stats["discoveries"] += self.tracker.update_registers(frame.registers, is_write=True)
-                # Log write
-                if frame.start_register in (0, 91):
-                    regs_str = ", ".join(f"reg_{k}={v}" for k, v in sorted(frame.registers.items()))
-                    logging.info(f"📝 HUB WRITE: {regs_str}")
-
-            self.csv_logger.log_frame(frame, state)
             self.pending_request = frame
-
-        elif frame.is_request is False:
+        elif frame.is_request is False and self.pending_request:
             self.stats["responses"] += 1
-
-            # Read responses: map offsets to absolute addresses using pending request
-            if self.pending_request and frame.function_code in (0x03, 0x04) and frame.registers:
-                start = self.pending_request.start_register
-                count = self.pending_request.register_count
-                abs_regs = {}
-                for offset, val in frame.registers.items():
-                    abs_regs[start + offset] = val
-                self.stats["discoveries"] += self.tracker.update_registers(abs_regs)
-
-                # Resolve coils if applicable
-                if hasattr(frame, '_coil_bytes') and self.pending_request:
-                    coil_start = self.pending_request.start_register
-                    coil_count = self.pending_request.register_count
-                    coils = {}
-                    for i in range(coil_count):
-                        byte_idx = i // 8
-                        bit_idx = i % 8
-                        if byte_idx < len(frame._coil_bytes):
-                            coils[coil_start + i] = bool(frame._coil_bytes[byte_idx] & (1 << bit_idx))
-                    if coils:
-                        frame.coils = coils
-                        self.stats["discoveries"] += self.tracker.update_coils(coils)
-
-                self.csv_logger.log_frame(frame, state, paired_start=start, paired_count=count)
-            else:
-                self.csv_logger.log_frame(frame, state)
-
+            frame.pair_response(self.pending_request)
             self.pending_request = None
+
+        # Update tracker and log discoveries
+        discoveries = self.tracker.update_from_frame(frame)
+        for d in discoveries:
+            self.stats["discoveries"] += 1
+            logging.warning(f"\U0001f50d {d}")
+
+        # State detection from register values (after response pairing)
+        state_change = None
+        if frame.registers and not frame.is_request:
+            state_change = self.state_detector.update(self.tracker.current_values, frame.timestamp)
+            if state_change:
+                self.stats["state_transitions"] = self.state_detector.transitions
+                t = self.state_detector.state_history[-1]
+                logging.info(f"\u26a1 {t['from']} \u2192 {t['to']} (was {t['duration_s']:.0f}s)")
+                self.mqtt_pub.publish_state_transition(t)
+
+        # CSV log
+        self.csv_logger.log_frame(frame, self.state_detector.current_state)
+
+        # Log hub writes
+        if frame.function_code in (0x06, 0x10) and frame.registers:
+            parts = []
+            for reg, val in sorted(frame.registers.items()):
+                v = to_signed(val) if reg in SIGNED_REGISTERS else val
+                parts.append(f"reg_{reg}={v}")
+            logging.info(f"\U0001f4dd HUB WRITE: {', '.join(parts)}")
 
     def _publish_batch(self):
         self.mqtt_pub.publish_registers(
@@ -779,7 +915,7 @@ class ModbusSniffer:
         elapsed = time.time() - self.stats["start_time"]
         hours = elapsed / 3600
         logging.info(
-            f"📊 {self.stats['frames_valid']}/{self.stats['frames_total']} frames, "
+            f"\U0001f4ca {self.stats['frames_valid']}/{self.stats['frames_total']} frames, "
             f"{self.stats['requests']} req, {self.stats['responses']} rsp, "
             f"{self.stats['discoveries']} disc, {self.stats['state_transitions']} trans, "
             f"{len(self.tracker.seen_registers)} regs, {len(self.tracker.seen_coils)} coils, "
