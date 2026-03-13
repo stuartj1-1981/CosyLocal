@@ -1,0 +1,54 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# QSH Modbus Sniffer — S6 service run script
+# ==============================================================================
+
+# Read add-on options
+GATEWAY_HOST=$(bashio::config 'gateway_host')
+GATEWAY_PORT=$(bashio::config 'gateway_port')
+PUBLISH_INTERVAL=$(bashio::config 'publish_interval')
+DEBUG=$(bashio::config 'debug')
+
+# MQTT: prefer add-on options, fall back to HA MQTT service discovery
+MQTT_HOST=$(bashio::config 'mqtt_host')
+MQTT_PORT=$(bashio::config 'mqtt_port')
+MQTT_USER=$(bashio::config 'mqtt_user')
+MQTT_PASS=$(bashio::config 'mqtt_pass')
+
+# If MQTT host is empty, use HA's built-in MQTT service
+if bashio::var.is_empty "${MQTT_HOST}"; then
+    if bashio::services.available "mqtt"; then
+        MQTT_HOST=$(bashio::services mqtt "host")
+        MQTT_PORT=$(bashio::services mqtt "port")
+        MQTT_USER=$(bashio::services mqtt "username")
+        MQTT_PASS=$(bashio::services mqtt "password")
+        bashio::log.info "Using HA MQTT service: ${MQTT_HOST}:${MQTT_PORT}"
+    else
+        bashio::log.warning "No MQTT service available — publishing disabled"
+    fi
+fi
+
+# Export for Python script
+export GATEWAY_HOST
+export GATEWAY_PORT
+export MQTT_HOST
+export MQTT_PORT
+export MQTT_USER
+export MQTT_PASS
+export PUBLISH_INTERVAL
+export LOG_DIR="/data/modbus_logs"
+
+if bashio::var.true "${DEBUG}"; then
+    export DEBUG="true"
+fi
+
+bashio::log.info "Starting QSH Modbus Sniffer v3.0.0"
+bashio::log.info "  Gateway: ${GATEWAY_HOST}:${GATEWAY_PORT}"
+bashio::log.info "  MQTT: ${MQTT_HOST}:${MQTT_PORT}"
+bashio::log.info "  Log dir: ${LOG_DIR}"
+
+# Create log directory
+mkdir -p "${LOG_DIR}"
+
+# Run the sniffer — S6 will restart if it exits
+exec python3 /opt/qsh/cosy6_decoder.py

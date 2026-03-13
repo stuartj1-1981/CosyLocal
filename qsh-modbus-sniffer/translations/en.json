@@ -1,0 +1,36 @@
+{
+  "configuration": {
+    "gateway_host": {
+      "name": "Gateway Host",
+      "description": "IP address of the Waveshare RS485-to-WiFi gateway"
+    },
+    "gateway_port": {
+      "name": "Gateway Port",
+      "description": "TCP port of the Waveshare gateway (default: 8899)"
+    },
+    "mqtt_host": {
+      "name": "MQTT Host",
+      "description": "MQTT broker hostname. Leave empty to auto-detect from Home Assistant."
+    },
+    "mqtt_port": {
+      "name": "MQTT Port",
+      "description": "MQTT broker port"
+    },
+    "mqtt_user": {
+      "name": "MQTT Username",
+      "description": "MQTT username. Leave empty to auto-detect from Home Assistant."
+    },
+    "mqtt_pass": {
+      "name": "MQTT Password",
+      "description": "MQTT password. Leave empty to auto-detect from Home Assistant."
+    },
+    "publish_interval": {
+      "name": "Publish Interval",
+      "description": "Seconds between MQTT publish cycles (1-60)"
+    },
+    "debug": {
+      "name": "Debug Logging",
+      "description": "Enable verbose debug output in the add-on log"
+    }
+  }
+}

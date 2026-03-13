@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# QSH Modbus Sniffer — S6 service finish script
+# ==============================================================================
+
+declare exit_code=${1}
+
+if [[ "${exit_code}" -ne 0 ]] && [[ "${exit_code}" -ne 256 ]]; then
+    bashio::log.warning "Sniffer exited with code ${exit_code} — S6 will restart"
+fi
