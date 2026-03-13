@@ -660,6 +660,7 @@ class ModbusSniffer:
                     continue
 
                 now = time.time()
+                logging.debug(f"recv {len(data)} bytes: {data.hex()}")
                 self._process_bytes(data, now)
 
                 # Periodic tasks
@@ -695,9 +696,6 @@ class ModbusSniffer:
                 self._try_parse_frame(now)
             self.buffer.append(byte)
             self.last_byte_time = now
-
-        if len(self.buffer) >= 5:
-            self._try_parse_frame(now)
 
     def _try_parse_frame(self, now: float):
         if len(self.buffer) < 4:
