@@ -1,6 +1,6 @@
 # QSH Modbus Sniffer
 
-Passive Modbus RTU sniffer for the **Octopus Energy Cosy 6** heat pump.
+Passive Modbus RTU sniffer for the **Octopus Energy Cosy heat pump.
 
 Captures all traffic between the Cosy Hub (master) and outdoor unit (slave) via a Waveshare RS485-to-WiFi gateway in transparent transmission mode. Publishes decoded register values to Home Assistant via MQTT auto-discovery.
 
