@@ -109,26 +109,33 @@ REGISTER_NAMES = {
     36: {"name": "T1 External Temp",     "scale": 0.1,  "unit": "°C",    "icon": "mdi:home-thermometer",     "class": "temperature"},
     # NAMED: AP mode label. Range 21-37°C suggests indoor/room sensor.
     37: {"name": "T2 Intermediate",      "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
-    # NAMED: AP mode label. Cold-side, correlates with evaporator (r=0.81)
-    38: {"name": "T3 Suction",           "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
-    # NAMED: AP mode label. Coldest sensor in circuit, tracks below outdoor
-    39: {"name": "Evaporator Temp",      "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-low",      "class": "temperature"},
-    # NAMED: AP mode label. Water return, always below flow temp
-    40: {"name": "T5 Return Temp",       "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
+    # STATISTICAL: Tracks outdoor ambient +5°C offset (r=0.953 vs reg_39) — enclosure heat from inverter/compressor. AP label: "T3 Suction"
+    38: {"name": "Internal Unit Temp",   "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
+    # STATISTICAL: Range −5.5–17.4°C consistent with UK ambient. AP label: "Evaporator Temp"
+    39: {"name": "Outdoor Ambient Temp", "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-low",      "class": "temperature"},
+    # STATISTICAL: r=0.950 vs flow temp; mean offset 3.72°C matches system ΔT. AP label: "T5 Return Temp"
+    40: {"name": "Return Water Temp",    "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
     # NAMED: AP mode label. Compressor sump temperature
     41: {"name": "T6 Sump",              "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
     # NAMED: AP mode label. Liquid line temperature
     43: {"name": "T8 Liquid",            "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
     # NAMED: AP mode label. Flow temperature (secondary sensor?)
     44: {"name": "T9 Flow Temp",         "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-water",    "class": "temperature"},
-    # NAMED: AP mode label. Compressor discharge
-    45: {"name": "T10 Discharge",        "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
+    # STATISTICAL: Only register >60°C (max 84.1°C); r=0.922 vs flow temp; mean 7.6°C above condensing temp. AP label: "T10 Discharge"
+    45: {"name": "Discharge Gas Temp",   "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
     # CONFIRMED: target flow temperature setpoint (hub → outdoor)
     91: {"name": "Target Flow Temp",     "scale": 0.1,  "unit": "°C",    "icon": "mdi:target",               "class": "temperature"},
 
     # --- Pressures (raw × 0.01 = bar) ---
     48: {"name": "Discharge Pressure",   "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge-full",           "class": None},
-    50: {"name": "Suction Pressure",     "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge",                "class": "pressure"},
+    # STATISTICAL: Range 2.75–5.97 (mean 4.23) consistent with COP; negative correlation with flow temp. Previously "Suction Pressure"
+    50: {"name": "Reported COP",         "scale": 0.01, "unit": "",      "icon": "mdi:gauge",                "class": None},
+
+    # --- Compressor ---
+    # STATISTICAL: Exact 0–100 range
+    51: {"name": "Compressor Speed",     "scale": 1,    "unit": "%",     "icon": "mdi:speedometer",          "class": None},
+    # STATISTICAL: Raw 0–600 = 0–60 Hz; r=0.708 vs compressor speed %
+    53: {"name": "Compressor Frequency", "scale": 0.1,  "unit": "Hz",    "icon": "mdi:sine-wave",            "class": "frequency"},
 
     # --- Flow rate (raw × 0.01 = l/min) ---
     # NAMED: Sika VVX20 flow meter built into unit
@@ -155,6 +162,10 @@ REGISTER_NAMES = {
     # --- UNCONFIRMED ---
     # Strong candidate for compressor speed but not proven
     63: {"name": "Unknown 63",           "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None},
+
+    # --- Operating mode ---
+    # STATISTICAL: Discrete values 0/1/2/3 — likely Off / Heating / DHW / Defrost (requires operational confirmation)
+    66: {"name": "Operating Mode",       "scale": 1,    "unit": "",      "icon": "mdi:state-machine",        "class": None},
 
     # --- Hub control registers ---
     92: {"name": "Mode Demand",          "scale": 1,    "unit": "",      "icon": "mdi:thermostat",           "class": None},

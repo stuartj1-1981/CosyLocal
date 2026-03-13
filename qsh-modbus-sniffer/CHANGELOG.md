@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.1.0
+
+- Added register identifications from statistical analysis of HA history data (24h, ~3s interval)
+- **High confidence**: reg_38 Internal Unit Temp, reg_39 Outdoor Ambient Temp, reg_40 Return Water Temp, reg_45 Discharge Gas Temp, reg_50 Reported COP, reg_51 Compressor Speed %, reg_53 Compressor Frequency Hz, reg_66 Operating Mode
+- **Medium confidence** (documented in unknown.md): reg_26 alt power, reg_56 alt heat output, reg_60 condensing pressure, reg_65 month
+- Corrected reg_50 from "Suction Pressure" to "Reported COP" (mean 4.23, cross-validated within 7% of implied COP)
+- Corrected reg_38 from "T3 Suction" to "Internal Unit Temp" (tracks outdoor +5°C, r=0.953)
+- Corrected reg_39 from "Evaporator Temp" to "Outdoor Ambient Temp" (range matches UK ambient)
+- Added identified.md and unknown.md register documentation
+
 ## 4.0.0
 
 - Fixed Modbus framing: scanning parser extracts multiple frames from concatenated TCP recv() chunks via CRC probing (fixes 0% CRC pass rate)
