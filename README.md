@@ -21,7 +21,7 @@ Captures all traffic between the Cosy Hub (master) and outdoor unit (slave) via 
 
 ## Register Map
 
-Registers are published as `sensor.qsh_modbus_sniffer_*` entities. Key confirmed registers:
+Registers are published as `sensor.qsh_modbus_sniffer_*` entities. See [identified.md](identified.md) for full details and evidence, [unknown.md](unknown.md) for registers under investigation.
 
 | Register | Name | Scale | Unit | Confidence |
 |----------|------|-------|------|------------|
@@ -29,8 +29,16 @@ Registers are published as `sensor.qsh_modbus_sniffer_*` entities. Key confirmed
 | 29 | Flow Temp | ×0.1 | °C | CONFIRMED |
 | 30 | Return Temp | ×0.1 | °C | CONFIRMED |
 | 36 | T1 External Temp | ×0.1 | °C | CONFIRMED (r=1.000 vs API) |
+| 38 | Internal Unit Temp | ×0.1 | °C | STATISTICAL |
+| 39 | Outdoor Ambient Temp | ×0.1 | °C | STATISTICAL |
+| 40 | Return Water Temp | ×0.1 | °C | STATISTICAL (r=0.950 vs flow) |
+| 45 | Discharge Gas Temp | ×0.1 | °C | STATISTICAL (r=0.922 vs flow) |
 | 47 | Flow Rate | ×0.01 | l/min | NAMED |
+| 50 | Reported COP | ×0.01 | — | STATISTICAL (mean 4.23) |
+| 51 | Compressor Speed | ×1 | % | STATISTICAL |
+| 53 | Compressor Frequency | ×0.1 | Hz | STATISTICAL |
 | 64 | Heat Output | ×1 | W | CONFIRMED (r=0.999 vs flow×ΔT) |
+| 66 | Operating Mode | ×1 | enum | STATISTICAL |
 | 91 | Target Flow Temp | ×0.1 | °C | CONFIRMED |
 
 ## Configuration
