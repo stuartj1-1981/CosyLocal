@@ -68,6 +68,4 @@ template:
 
 CSV logs are written to `/data/modbus_logs/` inside the add-on container, accessible via the share mount. Each day gets a separate file: `modbus_YYYY-MM-DD.csv`.
 
-## Background
 
-This add-on was developed to document a firmware bug in the Cosy 6 hub that causes "setpoint creep" — the target flow temperature (register 91) gradually drifts upward from optimal levels (~35°C) to inefficient temperatures (48°C+) over approximately two weeks, significantly degrading the coefficient of performance.
