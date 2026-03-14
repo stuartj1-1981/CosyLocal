@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.1.1
+
+- Fixed half-open TCP socket hang: recv() would block indefinitely when the Waveshare gateway connection dropped silently, causing hours of undetected data loss
+- Added TCP keepalive (KEEPIDLE=30s, KEEPINTVL=10s, KEEPCNT=3) to detect dead connections at the OS level within ~60s
+- Increased recv timeout to 30s and wired it into reconnection logic (hub sends every ~2.5s, so 30s silence = dead connection)
+- Added periodic watchdog log line ("Recv loop alive") every 60s to make future hangs immediately visible in logs
+
 ## 4.1.0
 
 - Added register identifications from statistical analysis of HA history data (24h, ~3s interval)
