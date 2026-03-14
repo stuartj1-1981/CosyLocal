@@ -67,6 +67,7 @@ DEFAULT_CONFIG = {
     "reconnect_max_delay": 60,
     "publish_interval": 5,
     "socket_timeout": 2.0,
+    "recv_timeout": 30,
 }
 
 FUNCTION_CODES = {
@@ -548,7 +549,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "4.0.0",
+                "sw_version": "4.1.1",
             },
             "availability": {
                 "topic": f"{self.base_topic}/status",
@@ -590,7 +591,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "4.0.0",
+                "sw_version": "4.1.1",
             },
             "availability": {
                 "topic": f"{self.base_topic}/status",
@@ -767,6 +768,15 @@ class ModbusSniffer:
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.socket.settimeout(self.config.get("socket_timeout", 2.0))
                 self.socket.connect((self.config["gateway_host"], self.config["gateway_port"]))
+
+                # TCP keepalive to detect half-open connections (~60s worst case)
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+                self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+
+                # Recv timeout: hub sends every ~2.5s, 30s silence = dead connection
+                self.socket.settimeout(self.config.get("recv_timeout", 30))
                 self.buffer.clear()
                 self.pending_request = None
                 self.consecutive_failures = 0
@@ -794,6 +804,9 @@ class ModbusSniffer:
         if not self.connect():
             return
 
+        last_recv_time = time.time()
+        last_watchdog_log = time.time()
+
         while self.running:
             try:
                 data = self.socket.recv(1024)
@@ -801,9 +814,11 @@ class ModbusSniffer:
                     logging.warning("Connection closed by gateway — reconnecting")
                     if not self.connect():
                         break
+                    last_recv_time = time.time()
                     continue
 
                 now = time.time()
+                last_recv_time = now
                 logging.debug(f"recv {len(data)} bytes: {data.hex()}")
                 self._process_bytes(data, now)
 
@@ -817,9 +832,21 @@ class ModbusSniffer:
                     self.last_map_save = now
                     self._log_stats()
 
+                # Watchdog: confirm recv loop is alive
+                if now - last_watchdog_log >= 60:
+                    ago = now - last_recv_time
+                    logging.info(f"Recv loop alive — last frame {ago:.0f}s ago")
+                    last_watchdog_log = now
+
             except socket.timeout:
+                # Hub sends every ~2.5s; 30s silence means connection is dead
                 if self.buffer:
                     self._try_parse_frame(time.time())
+                ago = time.time() - last_recv_time
+                logging.warning(f"Recv timeout ({ago:.0f}s no data) — reconnecting")
+                if not self.connect():
+                    break
+                last_recv_time = time.time()
                 continue
             except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError) as e:
                 logging.warning(f"Connection error: {e} — reconnecting")
