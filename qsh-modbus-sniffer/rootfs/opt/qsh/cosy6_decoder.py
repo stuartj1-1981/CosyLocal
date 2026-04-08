@@ -207,7 +207,7 @@ REGISTER_NAMES = {
     # Value 1714. Units unclear — if ×0.01 = 17.14 l/min.
     # Cross-check against Sika VVX20 flow meter data when available.
     # Stable during defrost (slight rise) — consistent with circulation pump continuing.
-    47: {"name": "Flow Rate",             "scale": 0.01, "unit": "l/min", "icon": "mdi:water-pump",           "class": None},
+    47: {"name": "Flow Rate",             "scale": 0.01, "unit": "L/min", "icon": "mdi:water-pump",           "class": "volume_flow_rate"},
 
     # --- Valve Positions ---
     # CONFIRMED (defrost validated): Valve position during heating. Scale ×0.1 confirmed
