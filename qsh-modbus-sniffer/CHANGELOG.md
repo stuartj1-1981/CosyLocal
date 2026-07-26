@@ -1,5 +1,14 @@
 # Changelog
 
+## 4.10.0 - 2026-07-26
+
+### Revise registers based on cross-validation
+
+Updated the following registers based on HP installer page
+`Cosy Modbus Reg 52` -> `Fan suction`
+`Cosy DHW Cylinder Temp` -> `Discharge Gas Temp`
+`Cosy Reported COP` -> `Suction`
+
 ## 4.9.0 - 2026-07-26
 
 ### Breaking

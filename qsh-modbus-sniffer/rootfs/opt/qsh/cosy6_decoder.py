@@ -160,12 +160,11 @@ REGISTER_NAMES = {
     # Previously misnamed "Condenser Mid Temp" — regs 29/30 are the actual
     # condenser (refrigerant) sensors. This is the water side.
     44: {"name": "T9 Flow Temp",          "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-water",    "class": "temperature"},
-    # CONFIRMED: DHW cylinder temp. During active DHW cycle (2026-02-18
-    # 06:30-08:21), read 52.4°C rising to 54.4°C toward 55°C setpoint.
-    # Range 22-82°C spans ambient (off) through DHW boost temperatures.
+    # CONFIRMED: Compressor discharge gas temp. Matches HP installer page.
+    # Previously misnamed "DHW Cylinder Temp" - not available via Modbus
     # Previously misnamed "Compressor Shell Temp" — reg 56 is the actual
     # discharge temp (40.8°C), confirming this is NOT a compressor sensor.
-    45: {"name": "DHW Cylinder Temp",     "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
+    45: {"name": "Discharge Gas Temp",     "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
     # CONFIRMED (defrost validated, R290 cross-check): Primary frost signal.
     # Steady state 5.8-7.8°C. Drops to 0°C at defrost trigger.
     # Spikes to 37-55°C during hot gas defrost, decays as ice melts.
@@ -206,16 +205,12 @@ REGISTER_NAMES = {
     # 13 bar → 35.1°C (matches condenser inlet R29). 5 bar → 4.8°C (matches
     # equalized evaporator R55). Closed.
     48: {"name": "Discharge Pressure",   "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge-full",           "class": "pressure"},
-    # STATISTICAL (identified.md + 2026-04-05 analysis): Reported COP.
-    # Raw range 236-635 at scale ×0.01 = 2.36-6.35 (unitless ratio).
-    # identified.md: mean 4.23, negative correlation with flow temp (higher
-    # lift → lower COP). Cross-validated: reg_64/reg_27 implied COP ≈ 3.94,
-    # Δ = 7% from reg_50 — within measurement uncertainty.
-    # 2026-04-05: inversely correlated with power/heat output. Mode means:
-    # idle 52.9 (/100=5.3), heating 35.6 (/100=3.6), DHW 32.0 (/100=3.2).
-    # Higher COP at idle is physically expected (no lift, residual circulation).
-    50: {"name": "Reported COP",          "scale": 0.01, "unit": "",      "icon": "mdi:gauge",                "class": None},
-
+    # CONFIRMED: Cross-validated with HP installer page during DWH cycle.
+    # Previously Reported COP but unlikely to be provided via Cosy
+    50: {"name": "Suction",          "scale": 0.01, "unit": "bar",      "icon": "mdi:gauge",                "class": "pressure"},
+    # CONFIRMED: Cross-validated with HP installer page during DHW cycle
+    52: {"name": "Fan Suction",           "scale": 1, "unit": "Pa",    "icon": "mdi:gauge",                "class": "pressure"},
+    
     # --- Flow Rate ---
     # NAMED: Second sniffer matched to "Flow Rate" from HP installer page.
     # Value 1714. Units unclear — if ×0.01 = 17.14 l/min.
