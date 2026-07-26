@@ -1,5 +1,7 @@
 ARG BUILD_FROM
 FROM ${BUILD_FROM}
+ARG BUILD_VERSION=unknown
+ENV APP_VERSION=${BUILD_VERSION}
 
 # Install Python dependencies
 RUN pip3 install --no-cache-dir --break-system-packages \

@@ -42,7 +42,7 @@ if bashio::var.true "${DEBUG}"; then
     export DEBUG="true"
 fi
 
-bashio::log.info "Starting QSH Modbus Sniffer v3.0.0"
+bashio::log.info "Starting QSH Modbus Sniffer v${APP_VERSION}"
 bashio::log.info "  Gateway: ${GATEWAY_HOST}:${GATEWAY_PORT}"
 bashio::log.info "  MQTT: ${MQTT_HOST}:${MQTT_PORT}"
 bashio::log.info "  Log dir: ${LOG_DIR}"

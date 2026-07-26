@@ -68,6 +68,7 @@ DEFAULT_CONFIG = {
     "publish_interval": 5,
     "socket_timeout": 2.0,
     "recv_timeout": 30,
+    "app_version": "unknown",
 }
 
 FUNCTION_CODES = {
@@ -113,7 +114,7 @@ REGISTER_NAMES = {
     # Scale ×0.1 confirmed by physics: raw 323-338 → 32.3-33.8 Hz (scroll compressor 20-80 Hz range).
     # Second sniffer matched from HP installer page display "Compressor Speed".
     # Second sniffer value 324 Hz during active SH — consistent with Stuart's data.
-    19: {"name": "Compressor Frequency",  "scale": 0.1,  "unit": "Hz",    "icon": "mdi:sine-wave",            "class": "frequency"},
+    19: {"name": "Compressor Frequency",  "scale": 0.1,  "unit": "Hz",    "icon": "mdi:sine-wave",            "class": "frequency", "display_precision": 1},
 
     # --- Temperatures (raw × 0.1 = °C) ---
     # NAMED: Originally labelled "flow_temp" by second sniffer but DISPROVEN
@@ -220,7 +221,7 @@ REGISTER_NAMES = {
     # Value 1714. Units unclear — if ×0.01 = 17.14 l/min.
     # Cross-check against Sika VVX20 flow meter data when available.
     # Stable during defrost (slight rise) — consistent with circulation pump continuing.
-    47: {"name": "Flow Rate",             "scale": 0.01, "unit": "L/min", "icon": "mdi:water-pump",           "class": "volume_flow_rate"},
+    47: {"name": "Flow Rate",             "scale": 0.01, "unit": "L/min", "icon": "mdi:water-pump",           "class": "volume_flow_rate",   "display_precision": 2},
 
     # --- Valve Positions ---
     # CONFIRMED (defrost validated): Valve position during heating. Scale ×0.1 confirmed
@@ -816,7 +817,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "4.7.0",
+                "sw_version": self.config["app_version"],
             },
         }
         self.client.publish(
@@ -844,7 +845,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "4.7.0",
+                "sw_version": self.config["app_version"],
             },
             "availability": {
                 "topic": "qsh_modbus/status",
@@ -873,6 +874,7 @@ class MQTTPublisher:
         unit = info.get("unit", "")
         icon = info.get("icon", "mdi:numeric" if not info else None)
         device_class = info.get("class")
+        display_precision = info.get("display_precision")
 
         uid = f"qsh_modbus_reg_{reg_num}"
         state_topic = f"{self.base_topic}/reg_{reg_num}/state"
@@ -887,7 +889,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "4.7.0",
+                "sw_version": self.config["app_version"],
             },
             "availability": {
                 "topic": "qsh_modbus/status",
@@ -901,6 +903,8 @@ class MQTTPublisher:
         if device_class:
             config_payload["device_class"] = device_class
             config_payload["state_class"] = "measurement"
+        if display_precision is not None:
+            config_payload["suggested_display_precision"] = display_precision
 
         config_topic = f"homeassistant/sensor/qsh_modbus/reg_{reg_num}/config"
         self.client.publish(config_topic, json.dumps(config_payload), retain=True)
@@ -931,7 +935,7 @@ class MQTTPublisher:
                 "name": "QSH Modbus Sniffer",
                 "manufacturer": "QSH",
                 "model": "Cosy 6 Passive Sniffer",
-                "sw_version": "4.7.0",
+                "sw_version": self.config["app_version"],
             },
             "availability": {
                 "topic": "qsh_modbus/status",
@@ -1145,7 +1149,7 @@ class ModbusSniffer:
     def run(self):
         self.running = True
         logging.info("=" * 60)
-        logging.info("QSH MODBUS SNIFFER v4 — HA ADD-ON")
+        logging.info(f"QSH MODBUS SNIFFER v{self.config['app_version']} — HA ADD-ON")
         logging.info(f"  Gateway: {self.config['gateway_host']}:{self.config['gateway_port']}")
         logging.info(f"  Slave: {self.config['slave_address']}")
         logging.info(f"  Log dir: {self.config['log_dir']}")
@@ -1361,6 +1365,7 @@ def main():
         "MQTT_PASS": ("mqtt_pass", str),
         "LOG_DIR": ("log_dir", str),
         "PUBLISH_INTERVAL": ("publish_interval", int),
+        "APP_VERSION": ("app_version", str),
     }
     for env_key, (config_key, converter) in env_map.items():
         val = os.environ.get(env_key)
