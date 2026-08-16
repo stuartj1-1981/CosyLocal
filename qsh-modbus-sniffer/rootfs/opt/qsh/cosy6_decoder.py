@@ -165,6 +165,12 @@ REGISTER_NAMES = {
     # Range 22-82°C spans ambient (off) through DHW boost temperatures.
     # Previously misnamed "Compressor Shell Temp" — reg 56 is the actual
     # discharge temp (40.8°C), confirming this is NOT a compressor sensor.
+    # DISPUTED (2026-08-16, PR #23): identified.md names reg 45 "Discharge
+    # Gas Temp" (r=0.922 vs flow temp; AP label "T10 Discharge") — doc and
+    # decoder disagree. Resolve with one test: plot regs 45, 56 and 19 over
+    # the 2026-02-18 06:30-08:21 DHW window. Reg 45 smooth and asymptotic
+    # to 55°C = cylinder probe (keep this name). Reg 45 tracks reg 19 =
+    # discharge gas (then rename regs 45 AND 56 together, one commit).
     45: {"name": "DHW Cylinder Temp",     "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
     # CONFIRMED (defrost validated, R290 cross-check): Primary frost signal.
     # Steady state 5.8-7.8°C. Drops to 0°C at defrost trigger.
@@ -215,6 +221,12 @@ REGISTER_NAMES = {
     # idle 52.9 (/100=5.3), heating 35.6 (/100=3.6), DHW 32.0 (/100=3.2).
     # Higher COP at idle is physically expected (no lift, residual circulation).
     50: {"name": "Reported COP",          "scale": 0.01, "unit": "",      "icon": "mdi:gauge",                "class": None},
+    # NAMED: HP installer page label "Fan suction (Pa)" (PR #23,
+    # johncuthbertuk). Unit assumed from label — no observed range logged
+    # yet. If raw values sit in 0-100, a percentage is more likely. A
+    # monobloc axial fan normally sees ~0 Pa external static pressure, so
+    # sanity-check real values before trusting the unit.
+    52: {"name": "Fan Suction",           "scale": 1,    "unit": "Pa",    "icon": "mdi:fan",                  "class": "pressure", "display_precision": 0},
 
     # --- Flow Rate ---
     # NAMED: Second sniffer matched to "Flow Rate" from HP installer page.

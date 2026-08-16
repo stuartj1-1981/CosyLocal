@@ -1,5 +1,26 @@
 # Changelog
 
+## 4.10.0 - 2026-08-16
+
+### Added
+
+New sensor: reg 52 "Fan Suction" (Pa, NAMED). Source: HP installer page
+label "Fan suction (Pa)" — thanks @johncuthbertuk (PR #23). The register
+previously published as "Cosy Modbus Reg 52". The unique_id is unchanged,
+so the entity is kept and renamed. The Pa unit comes from the label and
+is not yet verified against an observed range.
+
+### Notes
+
+Reg 45 is now flagged DISPUTED in identified.md and the decoder: the doc
+says "Discharge Gas Temp", the decoder says "DHW Cylinder Temp". The
+rename in PR #23 is held until a reg 45/56/19 cross-plot on the
+2026-02-18 DHW window resolves it.
+
+The reg 50 rename ("Reported COP" → "Suction") from PR #23 is held. It
+collides with reg 24 "Suction Pressure" (CONFIRMED by R290 P–T physics).
+A defrost or saturation cross-check will settle it.
+
 ## 4.9.0 - 2026-07-26
 
 ### Breaking
