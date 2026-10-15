@@ -28,6 +28,10 @@
       "name": "Publish Interval",
       "description": "Seconds between MQTT publish cycles (1-60)"
     },
+    "csv_max_total_mb": {
+      "name": "CSV Log Size Limit (MB)",
+      "description": "Maximum total size of all CSV frame logs. When the limit is reached, the add-on deletes the oldest CSV files first (50-10000)."
+    },
     "debug": {
       "name": "Debug Logging",
       "description": "Enable verbose debug output in the add-on log"

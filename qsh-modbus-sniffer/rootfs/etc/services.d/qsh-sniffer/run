@@ -7,6 +7,7 @@
 GATEWAY_HOST=$(bashio::config 'gateway_host')
 GATEWAY_PORT=$(bashio::config 'gateway_port')
 PUBLISH_INTERVAL=$(bashio::config 'publish_interval')
+CSV_MAX_TOTAL_MB=$(bashio::config 'csv_max_total_mb')
 DEBUG=$(bashio::config 'debug')
 
 # MQTT: prefer add-on options, fall back to HA MQTT service discovery
@@ -36,6 +37,7 @@ export MQTT_PORT
 export MQTT_USER
 export MQTT_PASS
 export PUBLISH_INTERVAL
+export CSV_MAX_TOTAL_MB
 export LOG_DIR="/config"
 
 if bashio::var.true "${DEBUG}"; then
@@ -46,6 +48,7 @@ bashio::log.info "Starting QSH Modbus Sniffer v${APP_VERSION}"
 bashio::log.info "  Gateway: ${GATEWAY_HOST}:${GATEWAY_PORT}"
 bashio::log.info "  MQTT: ${MQTT_HOST}:${MQTT_PORT}"
 bashio::log.info "  Log dir: ${LOG_DIR}"
+bashio::log.info "  CSV ring limit: ${CSV_MAX_TOTAL_MB} MB"
 
 # Create log directory
 mkdir -p "${LOG_DIR}"
