@@ -32,6 +32,7 @@ import time
 import json
 import csv
 import os
+import re
 import sys
 import signal
 import logging
@@ -62,6 +63,7 @@ DEFAULT_CONFIG = {
     "mqtt_base_topic": "Cosy HP",
     "slave_address": 10,
     "log_dir": "/config",
+    "csv_max_total_mb": 500,    # upper limit for ALL modbus_*.csv files together
     "frame_timeout_ms": 50,
     "reconnect_delay": 5,
     "reconnect_max_delay": 60,
@@ -1016,36 +1018,128 @@ class MQTTPublisher:
 
 
 # =============================================================================
-# CSV Logger
+# CSV Logger — circular (ring) log
 # =============================================================================
+#
+# Frames are written to segment files in log_dir:
+#
+#     modbus_YYYY-MM-DD.csv        first segment of a UTC day
+#     modbus_YYYY-MM-DD_001.csv    next segment, started when a segment is full
+#     modbus_YYYY-MM-DD_002.csv    ... and so on
+#
+# A new segment starts at UTC midnight, or when the active segment reaches
+# 1/CSV_SEGMENTS_PER_RING of the size limit. When the files together would
+# exceed the size limit, the OLDEST segments are deleted first. The active
+# segment is never deleted. Total CSV size therefore has a fixed upper limit
+# (csv_max_total_mb), plus at most about 30 s of new data (the flush interval).
+#
+# Only files that match the segment name pattern are counted or deleted.
+# Other files in log_dir (sniffer.log, register_map.json, files you add by
+# hand) are never touched.
+#
+# PASSIVE ONLY: this class writes to local files. It must never write to the
+# Modbus socket.
+
+CSV_SEGMENT_RE = re.compile(r"^modbus_(\d{4}-\d{2}-\d{2})(?:_(\d{3,}))?\.csv$")
+CSV_SEGMENTS_PER_RING = 10
+CSV_MIN_TOTAL_MB = 10
+CSV_FLUSH_INTERVAL_S = 30
+CSV_HEADER = [
+    "timestamp", "iso_time", "direction", "slave_addr", "function_hex",
+    "function_name", "start_reg", "reg_count", "registers_json",
+    "coils_json", "valid_crc", "raw_hex", "operating_state",
+]
+
 
 class CSVLogger:
-    def __init__(self, log_dir: str):
+    def __init__(self, log_dir: str, max_total_mb: int = 500):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.max_total_bytes = max(CSV_MIN_TOTAL_MB, int(max_total_mb)) * 1024 * 1024
+        self.max_segment_bytes = self.max_total_bytes // CSV_SEGMENTS_PER_RING
         self.file_handle = None
         self.writer = None
+        self.current_path = None
         self.current_date = None
         self.last_flush = 0
         self._open_file()
 
-    def _open_file(self):
+    def _segment_path(self, date_str: str, index: int) -> Path:
+        if index == 0:
+            return self.log_dir / f"modbus_{date_str}.csv"
+        return self.log_dir / f"modbus_{date_str}_{index:03d}.csv"
+
+    def _segments(self):
+        """Return (date, index, path) for every ring segment in log_dir, oldest first."""
+        found = []
+        for p in self.log_dir.iterdir():
+            m = CSV_SEGMENT_RE.match(p.name)
+            if m and p.is_file():
+                found.append((m.group(1), int(m.group(2) or 0), p))
+        found.sort(key=lambda t: (t[0], t[1]))
+        return found
+
+    def _close_file(self):
+        if self.file_handle:
+            self.file_handle.flush()
+            self.file_handle.close()
+        self.file_handle = None
+        self.writer = None
+
+    def _open_file(self, new_segment: bool = False):
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        if today != self.current_date:
-            if self.file_handle:
-                self.file_handle.flush()
-                self.file_handle.close()
-            filepath = self.log_dir / f"modbus_{today}.csv"
-            is_new = not filepath.exists()
-            self.file_handle = open(filepath, 'a', newline='')
-            self.writer = csv.writer(self.file_handle)
-            if is_new:
-                self.writer.writerow([
-                    "timestamp", "iso_time", "direction", "slave_addr", "function_hex",
-                    "function_name", "start_reg", "reg_count", "registers_json",
-                    "coils_json", "valid_crc", "raw_hex", "operating_state",
-                ])
-            self.current_date = today
+        if today == self.current_date and self.file_handle is not None and not new_segment:
+            return
+        self._close_file()
+
+        # Newest segment of today. After a restart, resume it if it has room.
+        todays = [(i, p) for d, i, p in self._segments() if d == today]
+        if todays:
+            index, path = todays[-1]
+            if new_segment or path.stat().st_size >= self.max_segment_bytes:
+                index += 1
+                path = self._segment_path(today, index)
+        else:
+            path = self._segment_path(today, 0)
+
+        is_new = not path.exists() or path.stat().st_size == 0
+        self.file_handle = open(path, 'a', newline='')
+        self.writer = csv.writer(self.file_handle)
+        if is_new:
+            self.writer.writerow(CSV_HEADER)
+        self.current_path = path
+        self.current_date = today
+        self._prune()
+
+    def _prune(self):
+        """Delete the oldest segments until all segments fit in the size limit."""
+        segments = self._segments()
+        sizes = {}
+        for _, _, p in segments:
+            try:
+                sizes[p] = p.stat().st_size
+            except OSError:
+                sizes[p] = 0
+
+        # Keep room for the active segment to grow to its full size.
+        limit = self.max_total_bytes - self.max_segment_bytes
+        others = sum(s for p, s in sizes.items() if p != self.current_path)
+
+        for _, _, p in segments:  # oldest first
+            if others <= limit:
+                break
+            if p == self.current_path:
+                continue
+            try:
+                p.unlink()
+            except OSError as e:
+                logging.warning(f"CSV ring: cannot remove {p.name}: {e}")
+                continue
+            others -= sizes[p]
+            logging.info(
+                f"CSV ring: removed {p.name} ({sizes[p] / (1024 * 1024):.1f} MB) "
+                f"- limit {self.max_total_bytes // (1024 * 1024)} MB"
+            )
 
     def log_frame(self, frame: ModbusFrame, operating_state: str):
         self._open_file()
@@ -1075,14 +1169,15 @@ class CSVLogger:
         ])
 
         now = time.time()
-        if now - self.last_flush > 30:
+        if now - self.last_flush > CSV_FLUSH_INTERVAL_S:
             self.file_handle.flush()
             self.last_flush = now
+            # Size check at flush time: no extra cost per frame.
+            if os.fstat(self.file_handle.fileno()).st_size >= self.max_segment_bytes:
+                self._open_file(new_segment=True)
 
     def close(self):
-        if self.file_handle:
-            self.file_handle.flush()
-            self.file_handle.close()
+        self._close_file()
 
 
 # =============================================================================
@@ -1097,7 +1192,7 @@ class ModbusSniffer:
         self.tracker = RegisterTracker(config["log_dir"])
         self.state_detector = OperatingStateDetector()
         self.mqtt_pub = MQTTPublisher(config)
-        self.csv_logger = CSVLogger(config["log_dir"])
+        self.csv_logger = CSVLogger(config["log_dir"], config["csv_max_total_mb"])
         self.buffer = bytearray()
         self.last_byte_time = 0
         self.frame_timeout = config["frame_timeout_ms"] / 1000.0
@@ -1165,6 +1260,7 @@ class ModbusSniffer:
         logging.info(f"  Gateway: {self.config['gateway_host']}:{self.config['gateway_port']}")
         logging.info(f"  Slave: {self.config['slave_address']}")
         logging.info(f"  Log dir: {self.config['log_dir']}")
+        logging.info(f"  CSV ring limit: {self.csv_logger.max_total_bytes // (1024 * 1024)} MB")
         logging.info(f"  MQTT: {'enabled' if HAS_MQTT else 'disabled'}")
         logging.info(f"  Signed regs: {sorted(SIGNED_REGISTERS)}")
         logging.info(f"  Named regs: {len(REGISTER_NAMES)}")
@@ -1376,6 +1472,7 @@ def main():
         "MQTT_USER": ("mqtt_user", str),
         "MQTT_PASS": ("mqtt_pass", str),
         "LOG_DIR": ("log_dir", str),
+        "CSV_MAX_TOTAL_MB": ("csv_max_total_mb", int),
         "PUBLISH_INTERVAL": ("publish_interval", int),
         "APP_VERSION": ("app_version", str),
     }

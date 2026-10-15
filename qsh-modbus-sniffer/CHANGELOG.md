@@ -1,5 +1,37 @@
 # Changelog
 
+## 4.11.0 - 2026-10-15
+
+### Fixed
+
+The daily CSV frame log had no size limit. The add-on wrote one file
+per day (`modbus_YYYY-MM-DD.csv`) and never deleted old files, so the
+total size grew until the disk was full.
+
+### Changed
+
+The CSV frame log is now a circular log.
+
+- New option `csv_max_total_mb` (default 500, range 50-10000). It sets
+  the upper limit for all CSV files together.
+- A new CSV file starts at UTC midnight, and when the active file
+  reaches 1/10 of the limit. Extra files for the same day are named
+  `modbus_YYYY-MM-DD_001.csv`, `_002.csv`, and so on.
+- When the total size exceeds the limit, the add-on deletes the oldest
+  CSV file first. It never deletes the active file.
+- Only files that match `modbus_YYYY-MM-DD[_NNN].csv` are counted or
+  deleted. Other files in `addon_config` are not touched.
+- The file name and the columns of the first file for each day are
+  unchanged.
+
+`sniffer.log` already rotates (6 files of 10 MB). No change.
+
+### Upgrade note
+
+At the first start, the add-on deletes the oldest existing CSV files
+until the total is under the limit. Copy out any capture you want to
+keep BEFORE you update.
+
 ## 4.10.0 - 2026-08-16
 
 ### Added

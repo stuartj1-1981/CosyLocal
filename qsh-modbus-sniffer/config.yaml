@@ -1,6 +1,6 @@
 name: "QSH Modbus Sniffer"
 description: "Passive Modbus RTU sniffer for Octopus Cosy 6 heat pump. Captures all traffic between hub and outdoor unit via Waveshare RS485-to-WiFi gateway."
-version: "4.10.0"
+version: "4.11.0"
 slug: "qsh_modbus_sniffer"
 url: "https://github.com/stuartleeks/qsh-modbus-sniffer"
 arch:
@@ -17,6 +17,7 @@ options:
   mqtt_user: ""
   mqtt_pass: ""
   publish_interval: 5
+  csv_max_total_mb: 500
   debug: false
 schema:
   gateway_host: str
@@ -26,6 +27,7 @@ schema:
   mqtt_user: str?
   mqtt_pass: password?
   publish_interval: "int(1,60)"
+  csv_max_total_mb: "int(50,10000)"
   debug: bool
 services:
   - mqtt:need

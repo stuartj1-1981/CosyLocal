@@ -52,6 +52,7 @@ Registers are published as `sensor.qsh_modbus_sniffer_*` entities. See [identifi
 | `mqtt_user` | *(auto)* | MQTT username |
 | `mqtt_pass` | *(auto)* | MQTT password |
 | `publish_interval` | `5` | Seconds between MQTT publishes |
+| `csv_max_total_mb` | `500` | Maximum total size of all CSV frame logs, in MB (50-10000) |
 | `debug` | `false` | Enable debug logging |
 
 ## Useful Template Sensors
@@ -74,6 +75,16 @@ template:
 
 ## Logs
 
-CSV logs are written to `/data/modbus_logs/` inside the add-on container, accessible via the share mount. Each day gets a separate file: `modbus_YYYY-MM-DD.csv`.
+The add-on writes all logs to its `addon_config` folder (`/config` inside the add-on container).
+
+| File | Content | Size limit |
+|------|---------|------------|
+| `sniffer.log` | Add-on messages | 6 files of 10 MB (rotating) |
+| `modbus_YYYY-MM-DD.csv`, `modbus_YYYY-MM-DD_001.csv`, ... | Every Modbus frame | `csv_max_total_mb` (circular) |
+| `register_map.json` | Register map | None (fixed size) |
+
+The CSV log is a circular log. A new CSV file starts at UTC midnight, and also when the active file reaches 1/10 of `csv_max_total_mb`. When the CSV files together exceed the limit, the add-on deletes the oldest CSV file first. The active file is never deleted. The add-on counts and deletes only files that match the `modbus_YYYY-MM-DD[_NNN].csv` pattern. It does not touch other files in the folder.
+
+To keep a capture, copy the CSV files out of `addon_config` before the limit removes them.
 
 
