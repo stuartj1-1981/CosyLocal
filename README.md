@@ -23,23 +23,26 @@ Captures all traffic between the Cosy Hub (master) and outdoor unit (slave) via 
 
 Registers are published as `sensor.qsh_modbus_sniffer_*` entities. See [identified.md](identified.md) for full details and evidence, [unknown.md](unknown.md) for registers under investigation.
 
+Home Assistant sets the entity ID when it first discovers a register. A rename in a later version changes the display name only, not the entity ID. See the 4.12.0 changelog.
+
 | Register | Name | Scale | Unit | Confidence |
 |----------|------|-------|------|------------|
-| 27 | Electrical Power In | ×1 | W | CONFIRMED (r=0.999 vs Shelly EM) |
-| 29 | HP LWT | ×0.1 | °C | CONFIRMED |
-| 30 | Condenser Temp | ×0.1 | °C | REVISED |
-| 36 | T1 External Temp | ×0.1 | °C | CONFIRMED (r=1.000 vs API) |
-| 38 | Internal Unit Temp | ×0.1 | °C | STATISTICAL |
-| 39 | Outdoor Ambient Temp | ×0.1 | °C | STATISTICAL |
-| 40 | System Return Temp | ×0.1 | °C | CONFIRMED (tracks Shelly return) |
-| 45 | Discharge Gas Temp | ×0.1 | °C | STATISTICAL (r=0.922 vs flow) |
-| 47 | Flow Rate | ×0.01 | l/min | NAMED |
-| 50 | Reported COP | ×0.01 | — | STATISTICAL (mean 4.23) |
-| 51 | Compressor Speed | ×1 | % | STATISTICAL |
-| 53 | Compressor Frequency | ×0.1 | Hz | STATISTICAL |
+| 20 | Electrical Power Input | ×1 | W | STATISTICAL (ratio 1.002 vs Shelly EM) |
+| 27 | Compressor Power | ×1 | W | STATISTICAL (ratio 0.933 vs Shelly EM — not total input) |
+| 36 | OAT External | ×0.1 | °C | CONFIRMED (r=1.000 vs API) |
+| 40 | T5 Return Temp | ×0.1 | °C | CONFIRMED (r=0.999 vs primary return) |
+| 44 | T9 Flow Temp | ×0.1 | °C | CONFIRMED (r=0.973 vs primary flow) |
+| 45 | Discharge Gas Temp | ×0.1 | °C | CONFIRMED |
+| 47 | Flow Rate | ×0.01 | L/min | NAMED |
+| 48 | Discharge Pressure | ×0.01 | bar g | CONFIRMED (R290 saturation) |
+| 50 | Suction Pressure | ×0.01 | bar g | CONFIRMED (R290 saturation) |
+| 56 | Saturated Condensing Temp | ×0.1 | °C | CONFIRMED |
+| 57 | Saturated Evaporating Temp | ×0.1 | °C | CONFIRMED |
+| 63 | Compressor Speed | ×0.01 | — | STATISTICAL |
 | 64 | Heat Output | ×1 | W | CONFIRMED (r=0.999 vs flow×ΔT) |
-| 66 | Operating Mode | ×1 | enum | STATISTICAL |
+| 65 | HP Controller State | ×1 | enum | CONFIRMED |
 | 91 | Target Flow Temp | ×0.1 | °C | CONFIRMED |
+| 92 | DHW Demand State | ×1 | enum | CONFIRMED (1 idle, 2 heating, 4 DHW) |
 
 ## Configuration
 
@@ -58,20 +61,23 @@ Registers are published as `sensor.qsh_modbus_sniffer_*` entities. See [identifi
 ## Useful Template Sensors
 
 ```yaml
-# CoP calculation
+# CoP calculation — heat output (reg 64) / total electrical input (reg 20).
+# Do not use reg 27 (Compressor Power): it reads ~7 % below the total input.
 template:
   - sensor:
       - name: "Cosy CoP"
         unit_of_measurement: ""
         state: >
           {% set heat = states('sensor.qsh_modbus_sniffer_cosy_heat_output') | float(0) %}
-          {% set power = states('sensor.qsh_modbus_sniffer_cosy_electrical_power_in') | float(0) %}
+          {% set power = states('sensor.qsh_modbus_sniffer_cosy_electrical_power_input') | float(0) %}
           {% if power > 50 %}
             {{ (heat / power) | round(2) }}
           {% else %}
             0
           {% endif %}
 ```
+
+On an install from before 4.12.0, reg 20 keeps its old entity ID (for example `sensor.qsh_modbus_sniffer_cosy_runtime_counter`). Check the entity ID in Home Assistant before you use the template.
 
 ## Logs
 

@@ -1,5 +1,107 @@
 # Changelog
 
+## 4.12.0 - 2026-10-17
+
+### Breaking
+
+Register corrections from the 2026-10-17 cold-weather capture (two
+defrosts at OAT 2.3-2.4 °C). Many registers had wrong names, scales or
+units. Some HA entities now show a different quantity. Check every
+automation, template and QSH input that reads a register in the tables
+below.
+
+The unique_id of each register sensor (`qsh_modbus_reg_{n}`) and the MQTT
+topics (`<base>/reg_{n}/state`) do not change. Consumers that read by
+register number keep working, but they now get the corrected value.
+
+Home Assistant keeps each existing entity ID. The display name changes;
+the entity ID does not. For example, reg 50 keeps an entity ID such as
+`sensor.qsh_modbus_sniffer_cosy_reported_cop` but now shows suction
+pressure. Rename entity IDs in HA if you want them to match.
+
+### Changed — value, scale or unit changes
+
+| Reg | Old name | New name | Change |
+|-----|----------|----------|--------|
+| 19 | Compressor Frequency (Hz ×0.1) | Unknown 19 | Raw, no unit. Not compressor speed |
+| 20 | Runtime Counter (s) | Electrical Power Input (W) | Unit only; total input, ratio 1.002 vs Shelly EM |
+| 24 | Suction Pressure (kPa ×0.1) | Unknown 24 | Raw, no unit. Not a pressure |
+| 25 | Heat Output (suspect) (W) | DC Link Voltage (candidate) | ×0.1 V |
+| 28 | Heat Output 2 (W) | Unknown 28 | Raw, no unit |
+| 32 | V1 Heating Valve (×0.1 %) | Main EEV Position | ×1, steps |
+| 50 | Reported COP | Suction Pressure | bar g ×0.01, device class pressure |
+| 52 | Fan Suction (Pa) | Water Flow Target | ×0.1 L/min |
+| 53 | DHW Tank Temp (°C) | Compressor Demand | ×0.1, no unit |
+| 54 | Outdoor Ambient Raw (raw) | Unknown Temp 54 | ×0.1 °C |
+| 57 | Defrost Accumulator (raw) | Saturated Evaporating Temp | ×0.1 °C (Te) |
+| 58 | (unnamed) | Defrost Te Threshold (hypothesis) | Signed ×0.1 °C (−12.0) |
+| 60 | Rated Elec Input (W) | Unknown 60 | No unit. Not constant |
+| 63 | Energy Counter (Wh) | Compressor Speed | ×0.01, no unit (rps or Hz open) |
+
+### Changed — name only (same value and unit)
+
+| Reg | Old name | New name |
+|-----|----------|----------|
+| 29 | Condenser Inlet Temp | Compressor Area Temp 1 |
+| 30 | Condenser Outlet Temp | Compressor Area Temp 2 |
+| 34 | Reversing Valve | Defrost Valve Position |
+| 37 | Indoor Ambient | Unknown Temp 37 |
+| 39 | Outdoor Coil Air Temp | Unknown Temp 39 |
+| 41 | Evaporator Inlet Temp | Sump Temp |
+| 45 | DHW Cylinder Temp | Discharge Gas Temp |
+| 55 | Evaporator Temp | Unknown Temp 55 |
+| 56 | Discharge Temp | Saturated Condensing Temp |
+| 62 | EEV Opening | Fan Speed Command |
+| 67 | Runtime Counter (provisional) | Sub-step Timer |
+| 77 | Config Param 77 | Standby Pump Run Flag |
+
+### Added
+
+- Reg 51 "Circulation Pump Speed" (%), reg 66 "HP State Sub-step".
+  Before, both published as "Cosy Modbus Reg N".
+- Reg 58 is now signed (raw 65416 = −12.0 °C).
+- Optional `state_class` key in `REGISTER_NAMES` for numeric registers
+  with no HA device class (used by regs 53 and 63).
+
+### Fixed
+
+- Operating state: "compressor running" now uses reg 63 > 0, not
+  reg 19 > 0. Reg 19 reads 0 during defrost while the compressor runs.
+  Before, a running compressor with reg 19 = 0 showed as HEATING_IDLE or
+  IDLE.
+- Operating state: DEFROST now comes from reg 65 in (6, 7, 8) only. The
+  fallback (reg 29 − reg 30 < 0) is removed: regs 29/30 are not condenser
+  temperatures.
+- Operating state: OIL_RECOVERY (reg 19 < 15) is removed. It had no
+  evidence. Those cycles now show as ACTIVE_UNKNOWN.
+- `state_transition` payload: `trigger_registers` now holds reg_19,
+  reg_57, reg_63, reg_65, reg_66, reg_92. reg_29, reg_30 and delta are
+  removed.
+
+### Upgrade notes
+
+1. **COP.** Use reg 20 (Electrical Power Input) as the denominator. Reg 27
+   is compressor power only: 0.933 of the Shelly EM reading, so a COP from
+   reg 27 reads ≈7 % high. Reg 50 is not a COP.
+2. **Frost signal.** Use reg 57 (Te). Do not use reg 55.
+3. **Defrost active.** Use reg 65 in (6, 7, 8), or the DEFROST operating
+   state. Reg 34 stays above 0 for up to 2 min after the defrost ends.
+4. **Pressures are gauge.** Absolute = value + 1.013 bar.
+5. **Long-term statistics.** HA may raise a Repairs issue for regs 19, 24,
+   25, 28, 52 and 53 (unit changed, or state class removed). The old
+   statistics are a different quantity: choose to delete them.
+6. **History graphs** show a step at the update for regs 19, 24, 25, 32,
+   52, 54, 57 and 63 (scale change).
+7. **QSH.** QSH reads registers by number. QSH changes are a separate
+   instruction.
+
+### Evidence
+
+`identified.md` and `unknown.md` are rewritten from the 2026-10-17
+capture. Confidence follows the findings document, except regs 66 and 67:
+STATISTICAL, not CONFIRMED (one installation; the sub-step boundaries
+were defined from reg 66; reg 67 conflicts with April 2026 Stu data).
+
 ## 4.11.0 - 2026-10-15
 
 ### Fixed
