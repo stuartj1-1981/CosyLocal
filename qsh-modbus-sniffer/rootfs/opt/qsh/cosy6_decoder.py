@@ -87,14 +87,17 @@ FUNCTION_CODES = {
 
 # Registers that can carry negative values (temperatures, offsets, valve steps).
 # Names updated 4.12.0 (2026-10-17 capture). Membership unchanged except reg 58.
+# 4.13.0: regs 34 and 35 added. At compressor start they read raw 64644-65250
+# (signed −89.2 to −28.6). As uint16 ×0.1 they showed 6464.4-6525.0.
 SIGNED_REGISTERS = {
     19,                                  # Unknown 19 (was compressor frequency)
     24,                                  # Unknown 24 (was suction pressure)
     29, 30,                              # Compressor area temps 1, 2
     32,                                  # Main EEV position (homing reads −586)
+    34, 35,                              # Defrost valve position, unknown 35 (start transients)
     36, 37, 38, 39,                      # OAT, unknown temp 37, suction line, unknown temp 39
     40, 41, 43, 44, 45,                  # Return, sump, liquid line, flow, discharge gas
-    50, 53, 54, 55,                      # Suction pressure, comp. demand, unknown temps 54/55
+    50, 53, 54, 55,                      # Suction pressure, comp. demand, unknown temp 54, superheat
     56, 57, 58,                          # Tc, Te, defrost Te threshold (raw 65416 = −12.0 °C)
     64,                                  # Heat Output (negative during reverse-cycle defrost)
     91,                                  # Target flow temp
@@ -113,16 +116,23 @@ ALL_REGISTERS = set(range(19, 53)) | set(range(53, 81)) | {210} | set(range(91, 
 #   STATISTICAL = strong internal evidence (correlation, ratio, timing) on one
 #                 installation; needs a second installation to promote
 #   NAMED       = identified from AP mode / installer page labels, data fits
+#   PROBABLE    = 2026-11-08 physics verification: best fit, not proven
 #   UNCONFIRMED = behaviour observed but identity not proven. Refuted names are
 #                 replaced by "Unknown N" / "Unknown Temp N"
+#
+# Evidence dated 2026-11-08 comes from the physics verification (slave 10,
+# 2.5 s poll, 2026-11-05 08:47 → 11-08 11:43 UTC, 107,586 frames; Shelly EM
+# ch1 as independent power meter). Source: register_map_confirmed_08nov2026.md.
 #
 # Evidence dated 2026-10-17 comes from the cold-weather capture (slave 10,
 # 12,126 poll cycles, 00:00-08:25 UTC, OAT 2.0-4.6 °C, two defrosts) and the
 # findings document cosy6-cold-weather-defrost-register-findings-2026-10-17.md.
 # Pressures (regs 48, 50) are GAUGE: absolute = value + 1.013 bar.
 #
-# Optional key "state_class": sets the HA state_class for a numeric register
-# that has no HA device class (see _send_discovery).
+# Optional key "state_class": sets the HA state_class. Without the key, a
+# register with a device class gets "measurement" and a register with no
+# device class gets none. "state_class": None removes it (regs 58, 60:
+# fixed values, no statistics). See _send_discovery.
 # =============================================================================
 REGISTER_NAMES = {
     # --- Compressor ---
@@ -131,11 +141,13 @@ REGISTER_NAMES = {
     # in defrost step 7.2; holds 59.9 in steps 1.2, 6.2, 8.1, 8.2. Max 104.8
     # (DHW). Falls to 0 in standby. Use reg 63 > 0 as "compressor running".
     # Previously "Energy Counter" (Wh) — refuted: not a counter.
+    # CONFIRMED (2026-11-08). Unit still open (rps or Hz). Runs ≈90 in defrost.
     63: {"name": "Compressor Speed",      "scale": 0.01, "unit": "",      "icon": "mdi:speedometer",          "class": None, "state_class": "measurement", "display_precision": 1},
     # STATISTICAL (2026-10-17): compressor demand, ×0.1, range 0-60.0.
     # 0 in standby; 59.9 when flow is below target; 15-42 near target; frozen
     # during defrost; r=0.96 with reg 63.
     # Previously "DHW Tank Temp" (°C) — refuted. Not a temperature.
+    # PROBABLE (2026-11-08). Not a temperature and not a frequency.
     53: {"name": "Compressor Demand",     "scale": 0.1,  "unit": "",      "icon": "mdi:gauge",                "class": None, "state_class": "measurement", "display_precision": 1},
     # UNCONFIRMED (2026-10-17). Previously "Compressor Frequency" (CONFIRMED) —
     # refuted: reads 0 for several minutes of each defrost while reg 63 = 89.9
@@ -144,7 +156,8 @@ REGISTER_NAMES = {
     # temp below return), not step 7.2 — not yet tested. Probably a non-negative
     # water-side quantity. Published raw (no scale, no unit) until identified.
     # Test: in states 6-8, does (reg 19 == 0) agree with (reg 64 < 0)?
-    19: {"name": "Unknown 19",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None},
+    # 2026-11-08: still not compressor speed.
+    19: {"name": "Unknown 19",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None, "state_class": "measurement"},
 
     # --- Refrigerant pressures (GAUGE) and saturation temperatures ---
     # CONFIRMED (2026-10-17, R290 saturation): discharge (high-side) pressure,
@@ -156,7 +169,8 @@ REGISTER_NAMES = {
     # Earlier comment used absolute values (13 bar → 35.1 °C) — wrong.
     # Gauge, CoolProp Propane: 13.0 bar g → 41.0 °C; 5.0 bar g → 8.0 °C.
     # History: reinstated 2026-04-11 from the 4.4.0 demotion.
-    48: {"name": "Discharge Pressure",    "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge-full",           "class": "pressure", "display_precision": 2},
+    # 4.13.0: "(gauge)" added to the name. Value and entity ID unchanged.
+    48: {"name": "Discharge Pressure (gauge)",    "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge-full",           "class": "pressure", "display_precision": 2},
     # CONFIRMED (2026-10-17, R290 saturation): suction (low-side) pressure,
     # GAUGE, bar ×0.01. reg 57 = Tsat(reg 50 + 1.013 bar) to −0.08 K median
     # (p5-p95 −0.17 to +0.03 K). Standby equalised: reg 48 3.83, reg 50
@@ -164,29 +178,32 @@ REGISTER_NAMES = {
     # reversal back.
     # Previously "Reported COP" — refuted: 2.24 when reg 64 / reg 20 = 3.49;
     # 5.64 in reverse cycle while heat output is −8 kW.
-    50: {"name": "Suction Pressure",      "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge-low",            "class": "pressure", "display_precision": 2},
+    # CONFIRMED again 2026-11-08. 4.13.0: "(gauge)" added to the name.
+    50: {"name": "Suction Pressure (gauge)", "scale": 0.01, "unit": "bar",   "icon": "mdi:gauge-low",            "class": "pressure", "display_precision": 2},
     # CONFIRMED (2026-10-17): saturated condensing temperature (Tc), calculated
     # by the unit from reg 48 (gauge + atmosphere). −0.08 K median, all cycles.
     # Previously "Discharge Temp" — refuted. Discharge gas temp is reg 45.
-    56: {"name": "Saturated Condensing Temp", "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
+    # 4.13.0: "(calc)" added — the unit calculates it, no sensor measures it.
+    56: {"name": "Saturated Condensing Temp (calc)", "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
     # CONFIRMED (2026-10-17): saturated evaporating temperature (Te), calculated
     # by the unit from reg 50 (gauge + atmosphere). −0.08 K median, all cycles.
     # Signed ×0.1 °C. Frost signal: both 2026-10-17 defrosts started 10 s after
     # reg 57 reached −12.0 °C (reg 58). Swings −41 to +44 °C at the reversals.
     # Previously "Defrost Accumulator" (raw, no unit) — refuted.
-    57: {"name": "Saturated Evaporating Temp", "scale": 0.1,  "unit": "°C",    "icon": "mdi:snowflake-thermometer", "class": "temperature"},
-    # UNCONFIRMED — hypothesis (2026-10-17): demand-defrost Te threshold, signed
-    # ×0.1 °C. Constant raw 65416 (signed −120 → −12.0 °C) for the full capture.
-    # Both defrosts started 10 s after reg 57 ≤ reg 58. n=2 at one OAT
-    # (2.3-2.4 °C): a fixed Te threshold and an approach criterion
-    # (OAT − Te ≈ 14.3 K) cannot yet be told apart.
-    # Test: capture defrosts at OAT < 0 °C and at 4-6 °C.
-    58: {"name": "Defrost Te Threshold (hypothesis)", "scale": 0.1,  "unit": "°C",    "icon": "mdi:snowflake-alert",      "class": "temperature"},
+    # CONFIRMED again 2026-11-08. 4.13.0: "(calc)" added to the name.
+    57: {"name": "Saturated Evaporating Temp (calc)", "scale": 0.1,  "unit": "°C",    "icon": "mdi:snowflake-thermometer", "class": "temperature"},
+    # CONFIRMED (2026-11-08, 3 of 3 defrosts): demand-defrost Te threshold,
+    # signed ×0.1 °C. Constant raw 65416 (signed −120 → −12.0 °C). Defrost
+    # starts when reg 57 ≤ reg 58 (margin ≤ 0). 2026-10-17: two defrosts
+    # started 10 s after reg 57 reached −12.0 °C; a 15 s excursion 2.5 min
+    # after start gave no defrost (start-up inhibit probable).
+    # No state_class: a fixed value, statistics have no use.
+    58: {"name": "Defrost Te Threshold",  "scale": 0.1,  "unit": "°C",    "icon": "mdi:snowflake-alert",      "class": "temperature", "state_class": None},
     # UNCONFIRMED (2026-10-17): constant 6,080 in heating and in both defrosts
     # while reg 50 moves 0.04-14.0 bar g. Steps to 4,800-5,170 at start, in
     # standby and at low load. Not a pressure. Published raw until identified.
     # Previously "Suction Pressure" (kPa ×0.1) — refuted. Suction is reg 50.
-    24: {"name": "Unknown 24",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None},
+    24: {"name": "Unknown 24",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None, "state_class": "measurement"},
 
     # --- Refrigerant-side temperatures (raw × 0.1 = °C) ---
     # CONFIRMED (2026-10-17): discharge gas temperature (AP label "T10
@@ -196,6 +213,7 @@ REGISTER_NAMES = {
     # A cylinder cannot do this. Closes the 4.10.0 DISPUTED item: regs 45 and
     # 56 renamed together. Previously "DHW Cylinder Temp". No register is
     # identified as cylinder temperature.
+    # 2026-11-08 verification grades it PROBABLE.
     45: {"name": "Discharge Gas Temp",    "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-high",     "class": "temperature"},
     # CONFIRMED: suction line temperature (AP label "T3 Suction"). 2026-10-17:
     # suction superheat (reg 38 − reg 57) held at 6.8 K, IQR 6.3-7.3 K.
@@ -211,7 +229,8 @@ REGISTER_NAMES = {
     # +26.6 °C when Te = −11.9 °C; 40.6-41.0 °C for 1 h after DHW.
     # Previously "Evaporator Inlet Temp" — refuted (an evaporator inlet reads
     # near Te). The refrigerant is R290, not R32.
-    41: {"name": "Sump Temp",             "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
+    # PROBABLE (2026-11-08). 4.13.0: renamed "Compressor Sump Temp".
+    41: {"name": "Compressor Sump Temp",        "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer",          "class": "temperature"},
     # UNCONFIRMED (2026-10-17): slow temperature in the compressor area.
     # 48.9 °C (reg 29) / 43.9 °C (reg 30) after 4.5 h standby at OAT 2.4 °C;
     # no response to defrost; lags reg 45. Candidates: compressor body, or
@@ -224,11 +243,14 @@ REGISTER_NAMES = {
     # UNCONFIRMED (2026-10-17): see reg 29. Tracks reg 29, about 5 K lower.
     # Previously "Condenser Outlet Temp" — refuted.
     30: {"name": "Compressor Area Temp 2", "scale": 0.1,  "unit": "°C",    "icon": "mdi:thermometer-chevron-down", "class": "temperature"},
-    # UNCONFIRMED (2026-10-17): +6.6 °C in heating when Te = −11.9 °C and OAT
-    # 2.3 °C; 20.5 °C in standby; spikes at reversal; floors at 0 (19 cycles).
-    # Previously "Evaporator Temp" (CONFIRMED, P0 frost signal) — refuted.
+    # CONFIRMED (2026-11-08): suction superheat, calculated by the unit,
+    # reg 55 = reg 38 − reg 57, K ×0.1, signed. 2026-10-17: +6.6 K in heating
+    # (suction superheat held at 6.8 K); floors at 0 (19 cycles).
+    # Unit K and NO device class: it is a temperature difference. HA device
+    # class "temperature" would convert K as an absolute temperature.
+    # Previously "Evaporator Temp" (P0 frost signal), then "Unknown Temp 55".
     # DO NOT use as a frost signal. Use reg 57 (Te).
-    55: {"name": "Unknown Temp 55",       "scale": 0.1,  "unit": "°C",    "icon": "mdi:help-circle",          "class": "temperature"},
+    55: {"name": "Suction Superheat (calc)", "scale": 0.1,  "unit": "K",     "icon": "mdi:thermometer-plus",     "class": None, "state_class": "measurement", "display_precision": 1},
 
     # --- Air and enclosure temperatures (raw × 0.1 = °C) ---
     # CONFIRMED: r=1.000 vs Octopus API outdoor_temperature (n=402, max diff
@@ -267,12 +289,13 @@ REGISTER_NAMES = {
     # (reg 52 / 10) / (reg 47 / 100) median 1.00, IQR 0.99-1.01 in run.
     # Floor 6.5 L/min. Held at 12.0 in states 6-7 while the pump runs 100 %.
     # Previously "Fan Suction" (Pa, NAMED from installer page label, 4.10.0) —
-    # refuted by the ratio above.
+    # refuted by the ratio above. CONFIRMED (2026-11-08).
     52: {"name": "Water Flow Target",     "scale": 0.1,  "unit": "L/min", "icon": "mdi:water-pump",           "class": "volume_flow_rate", "display_precision": 1},
     # STATISTICAL (2026-10-17): circulation pump speed, %. r=0.976 with reg 47.
     # 100 % in reverse cycle; 33 % in standby pump runs with compressor off.
     # identified.md previously named it "Compressor Speed" — refuted.
-    51: {"name": "Circulation Pump Speed", "scale": 1,    "unit": "%",     "icon": "mdi:pump",                 "class": None},
+    # CONFIRMED (2026-11-08).
+    51: {"name": "Circulation Pump Speed", "scale": 1,    "unit": "%",     "icon": "mdi:pump",                 "class": None, "state_class": "measurement"},
     # CONFIRMED: heat output, W, signed Int16. 2026-10-17: reg 64 =
     # reg 47 × 4.18 × (reg 44 − reg 40): ratio 1.001, r=0.9994 in run; ratio
     # 0.98 in defrost. Minimum −8,057 W. Signed reading confirmed on two
@@ -285,9 +308,11 @@ REGISTER_NAMES = {
     # ratio 1.002, r=0.993 (5,521 cycles > 100 W). Standby pump run reads 30 W
     # (Shelly 0-9 W). Use this register as the COP denominator.
     # Previously "Runtime Counter" (s) — refuted.
+    # CONFIRMED (2026-11-08): integrated energy 5.20 kWh vs Shelly EM 5.19 kWh.
     20: {"name": "Electrical Power Input", "scale": 1,    "unit": "W",     "icon": "mdi:flash",                "class": "power"},
     # STATISTICAL (2026-10-17): also total input. Median ratio 1.012 vs Shelly
     # EM. The difference from reg 20 is not explained.
+    # 2026-11-08: reads 2.9 % high vs Shelly EM energy. Use reg 20.
     26: {"name": "Electrical Power Total", "scale": 1,    "unit": "W",     "icon": "mdi:flash",                "class": "power"},
     # STATISTICAL (2026-10-17): compressor power — NOT total input. Median ratio
     # 0.933 vs Shelly EM (−106 W). The earlier r=0.999 (n=1206) is shape, not
@@ -296,18 +321,20 @@ REGISTER_NAMES = {
     # UNCONFIRMED (2026-10-17): candidate DC-link voltage, ×0.1 V. Range
     # 369.8-384.8 V; r=−0.84 with input power (sag under load); never zero.
     # Previously "Heat Output (suspect)" — refuted.
+    # PROBABLE (2026-11-08).
     25: {"name": "DC Link Voltage (candidate)", "scale": 0.1,  "unit": "V",     "icon": "mdi:flash-triangle",       "class": "voltage", "display_precision": 1},
     # UNCONFIRMED (2026-10-17): tracks power non-linearly (ratio 0.67 to Shelly
     # EM, r=0.87). Current-like. Test: clamp meter on the compressor lead.
     # Previously "Heat Output 2" — refuted. Published raw until identified.
-    28: {"name": "Unknown 28",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None},
+    # 2026-11-08: positive in defrost, so NOT heat.
+    28: {"name": "Unknown 28",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None, "state_class": "measurement"},
 
     # --- Valves and fan ---
     # STATISTICAL (2026-10-17): main EEV position, steps (raw, signed).
     # Homing at start: −586 → 392 → 624 → 200 (same as reg 35). 0 in reverse
     # cycle; 160-390 in heating. Suction superheat (reg 38 − reg 57) held at
-    # 6.8 K. Previously "V1 Heating Valve" (×0.1 %).
-    32: {"name": "Main EEV Position",     "scale": 1,    "unit": "steps", "icon": "mdi:valve",                "class": None},
+    # 6.8 K. Previously "V1 Heating Valve" (×0.1 %). PROBABLE (2026-11-08).
+    32: {"name": "Main EEV Position",     "scale": 1,    "unit": "steps", "icon": "mdi:valve",                "class": None, "state_class": "measurement"},
     # STATISTICAL (2026-10-17): valve position used in reverse cycle only.
     # 0 in heating and in standby; ≈96 at the reversal; 61-87 in steps 7.2-8.x;
     # 0 again within 2 min after the defrost ends. Valve identity open (a 4-way
@@ -316,21 +343,27 @@ REGISTER_NAMES = {
     # defrost transitions — not seen on 2026-10-17.
     # Previously "Reversing Valve". For "defrost active" use reg 65 in
     # (6, 7, 8).
-    34: {"name": "Defrost Valve Position", "scale": 0.1,  "unit": "%",     "icon": "mdi:snowflake-melt",       "class": None},
+    # PROBABLE (2026-11-08). Also non-zero in STOPPING (4) and STARTING (3).
+    # Start frames read raw 64644-65250 (signed −89.2 to −28.6): signed from
+    # 4.13.0. Before, they showed as 6464.4-6525.0 %.
+    34: {"name": "Defrost Valve Position", "scale": 0.1,  "unit": "%",     "icon": "mdi:snowflake-melt",       "class": None, "state_class": "measurement"},
     # UNCONFIRMED: second valve, steps. Homes with reg 32 at start.
     # 2026-10-17: opens 80-114 (raw) when reg 29 is high — open in 0 % of
     # cycles below 66 °C, 47 % at 70-72 °C, 97-100 % at ≥ 72 °C.
     # Candidates: liquid injection for compressor temperature, or refrigerant
     # cooling of the inverter module (fits the AP label "V4 Inverter").
-    # Scale and unit kept (×0.1 %) until identified.
-    35: {"name": "V4 Inverter",           "scale": 0.1,  "unit": "%",     "icon": "mdi:sine-wave",            "class": None},
+    # 2026-11-08: identity unknown. 4.13.0: renamed "Unknown 35" (was "V4
+    # Inverter"). Scale ×0.1 kept; % unit removed. Signed from 4.13.0: start
+    # transients as reg 34.
+    35: {"name": "Unknown 35",            "scale": 0.1,  "unit": "",      "icon": "mdi:help-circle",          "class": None, "state_class": "measurement"},
     # CONFIRMED: fan speed (AP label; both sniffers agree). 2026-10-17: 0 rpm in
     # defrost steps 7.x-8.1; restarts at ≈700 rpm in step 8.2.
     61: {"name": "Fan Speed",             "scale": 1,    "unit": "RPM",   "icon": "mdi:fan",                  "class": None},
     # STATISTICAL (2026-10-17): fan speed command, %. r=0.982 with reg 61 in
     # run; 0 when the fan stops. Previously "EEV Opening" — refuted (the main
     # EEV is reg 32).
-    62: {"name": "Fan Speed Command",     "scale": 1,    "unit": "%",     "icon": "mdi:fan",                  "class": None},
+    # CONFIRMED (2026-11-08): reg 61 ≈ 14.3 × reg 62.
+    62: {"name": "Fan Speed Command",     "scale": 1,    "unit": "%",     "icon": "mdi:fan",                  "class": None, "state_class": "measurement"},
 
     # --- Controller state ---
     # CONFIRMED: HP controller operating state.
@@ -352,21 +385,21 @@ REGISTER_NAMES = {
     # plant actions (compressor speed steps, fan stop, 4-way reversal); reg 67
     # resets at each change. The identified.md reading "Off/Heat/DHW/Defrost"
     # is refuted. Held below CONFIRMED: one installation, and the step
-    # boundaries were defined from this register.
-    66: {"name": "HP State Sub-step",     "scale": 1,    "unit": "",      "icon": "mdi:numeric",              "class": None},
+    # boundaries were defined from this register. PROBABLE (2026-11-08).
+    66: {"name": "HP State Sub-step",     "scale": 1,    "unit": "",      "icon": "mdi:numeric",              "class": None, "state_class": "measurement"},
     # STATISTICAL (2026-10-17): sub-step timer, s. Counts 1 s/s from 0 in each
     # sub-step (slope 0.99-1.01, offset ≤ 1.8 s, 19 timed blocks). Reads 0 in
     # state 2 and in defrost step 7.2. Counts in standby (16,410 s seen).
     # Explains the AdamLC capture (0 in heating). OPEN: Stu April 2026 data
     # showed 1,648 counts over 1,650 s before a defrost — check whether reg 65
     # was 2 in that window. Previously "Runtime Counter (provisional)".
-    # Unsigned — not in SIGNED_REGISTERS.
+    # Unsigned — not in SIGNED_REGISTERS. PROBABLE (2026-11-08).
     67: {"name": "Sub-step Timer",        "scale": 1,    "unit": "s",     "icon": "mdi:timer-outline",        "class": "duration"},
     # STATISTICAL (2026-10-17): standby pump-run flag. 2 in 937 of 961 standby
     # pump-on cycles; 0 in 5,594 of 5,615 pump-off cycles. In standby at
     # OAT ≈ 2 °C the pump runs 5 min every 30 min.
-    # Previously "Config Param 77".
-    77: {"name": "Standby Pump Run Flag", "scale": 1,    "unit": "",      "icon": "mdi:pump",                 "class": None},
+    # Previously "Config Param 77". 2026-11-08: name from the HA map, not tested.
+    77: {"name": "Standby Pump Run Flag", "scale": 1,    "unit": "",      "icon": "mdi:pump",                 "class": None, "state_class": "measurement"},
     # UNRESOLVED (2026-04-11): binary flag, all 0 over 10 days (43 samples).
     # Same slow poll group as reg 210 and reg 77. 2026-10-17: 0 all capture.
     75: {"name": "Unknown 75",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None},
@@ -378,7 +411,9 @@ REGISTER_NAMES = {
     # UNCONFIRMED (2026-10-17): not constant. Steps 1100/1200/1300/1400,
     # inversely with Te (r=−0.89). Not condensing pressure.
     # Previously "Rated Elec Input" (constant 1300 W) — refuted.
-    60: {"name": "Unknown 60",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None},
+    # 2026-11-08: changes 1100 ↔ 1300, so not a nameplate value.
+    # No state_class (as specified in the 2026-11-08 change).
+    60: {"name": "Unknown 60",            "scale": 1,    "unit": "",      "icon": "mdi:help-circle",          "class": None, "state_class": None},
 
     # --- Hub control registers ---
     # CONFIRMED: hub demand state (FC 0x10 write, hub → outdoor).
@@ -421,6 +456,15 @@ def verify_crc(frame: bytes) -> bool:
 
 def to_signed(value: int) -> int:
     return value - 0x10000 if value >= 0x8000 else value
+
+
+def decode_register(reg_num: int, raw_val: int):
+    """Return the published value of a register: int16 if signed, then scale."""
+    val = to_signed(raw_val) if reg_num in SIGNED_REGISTERS else raw_val
+    scale = REGISTER_NAMES.get(reg_num, {}).get("scale", 1)
+    if scale != 1:
+        val = round(val * scale, 2)
+    return val
 
 
 # =============================================================================
@@ -848,7 +892,12 @@ class MQTTPublisher:
         unit = info.get("unit", "")
         icon = info.get("icon", "mdi:numeric" if not info else None)
         device_class = info.get("class")
-        state_class = info.get("state_class")
+        # Explicit key wins (None = no state_class). Default: "measurement"
+        # with a device class, none without.
+        if "state_class" in info:
+            state_class = info["state_class"]
+        else:
+            state_class = "measurement" if device_class else None
         display_precision = info.get("display_precision")
 
         uid = f"qsh_modbus_reg_{reg_num}"
@@ -877,10 +926,8 @@ class MQTTPublisher:
             config_payload["icon"] = icon
         if device_class:
             config_payload["device_class"] = device_class
-            config_payload["state_class"] = "measurement"
-        elif state_class:
-            # Numeric register with no HA device class (e.g. reg 63 speed,
-            # reg 53 demand). state_class gives a line graph and statistics.
+        if state_class:
+            # state_class gives a line graph and long-term statistics.
             config_payload["state_class"] = state_class
         if display_precision is not None:
             config_payload["suggested_display_precision"] = display_precision
@@ -933,16 +980,7 @@ class MQTTPublisher:
 
         for reg_num, raw_val in values.items():
             self._send_discovery(reg_num)
-            info = REGISTER_NAMES.get(reg_num, {})
-            scale = info.get("scale", 1)
-
-            if reg_num in SIGNED_REGISTERS:
-                val = to_signed(raw_val)
-            else:
-                val = raw_val
-
-            if scale != 1:
-                val = round(val * scale, 2)
+            val = decode_register(reg_num, raw_val)
 
             state_topic = f"{self.base_topic}/reg_{reg_num}/state"
             self.client.publish(state_topic, str(val), retain=True)
