@@ -1,0 +1,62 @@
+# Cosy 6 — derived entities (register map 2026-11-08, section C)
+#
+# Install:
+#   1. configuration.yaml must load packages:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   2. Copy this file to <config>/packages/cosy_derived.yaml.
+#   3. Do the entity_id renames FIRST (tools/cosy_ha_migrate.py rename).
+#      These templates read the NEW entity_ids.
+#   4. Developer tools > YAML > Check configuration, then reload
+#      "Template entities".
+#
+# default_entity_id sets the entity_id at first registration only
+# (HA 2025.10 and later; on older HA use object_id without the domain).
+# The unique_id lets you rename or move the entity in the UI later.
+#
+# Each entity is unavailable when an input is unavailable. The register
+# sensors expire 60 s after the sniffer stops, so these expire with them.
+
+template:
+  - binary_sensor:
+      # C1. Defrost active: on when R65 is 6 (prepare), 7 (active) or 8 (exit).
+      - name: "Cosy Defrost Active"
+        unique_id: cosy_derived_defrost_active
+        default_entity_id: binary_sensor.hub_cosy_hp_cosy_defrost_active
+        icon: mdi:snowflake-melt
+        availability: >
+          {{ has_value('sensor.hub_cosy_hp_cosy_hp_controller_state') }}
+        state: >
+          {{ states('sensor.hub_cosy_hp_cosy_hp_controller_state') | float(0) | int(0)
+             in [6, 7, 8] }}
+
+  - sensor:
+      # C2. Defrost margin = Te (R57) − defrost Te threshold (R58).
+      # The defrost starts at margin ≤ 0. With R58 = −12.0: margin = Te + 12.0.
+      # Unit K and no device class: it is a temperature difference.
+      - name: "Cosy Defrost Margin"
+        unique_id: cosy_derived_defrost_margin
+        default_entity_id: sensor.hub_cosy_hp_cosy_defrost_margin
+        icon: mdi:snowflake-thermometer
+        unit_of_measurement: "K"
+        state_class: measurement
+        availability: >
+          {{ has_value('sensor.hub_cosy_hp_cosy_saturated_evaporating_temp')
+             and has_value('sensor.hub_cosy_hp_cosy_defrost_te_threshold') }}
+        state: >
+          {{ (states('sensor.hub_cosy_hp_cosy_saturated_evaporating_temp') | float
+              - states('sensor.hub_cosy_hp_cosy_defrost_te_threshold') | float) | round(1) }}
+
+      # C3. HP controller state (R65) as text.
+      - name: "Cosy HP Controller State Text"
+        unique_id: cosy_derived_hp_controller_state_text
+        default_entity_id: sensor.hub_cosy_hp_cosy_hp_controller_state_text
+        icon: mdi:state-machine
+        availability: >
+          {{ has_value('sensor.hub_cosy_hp_cosy_hp_controller_state') }}
+        state: >
+          {% set n = states('sensor.hub_cosy_hp_cosy_hp_controller_state') | float(0) | int(0) %}
+          {% set names = {1: 'INITIALISING', 2: 'RUNNING', 3: 'STARTING', 4: 'STOPPING',
+                          6: 'DEFROST_PREPARE', 7: 'DEFROST_ACTIVE', 8: 'DEFROST_EXIT',
+                          10: 'OFF'} %}
+          {{ names.get(n, 'UNKNOWN_' ~ n) }}

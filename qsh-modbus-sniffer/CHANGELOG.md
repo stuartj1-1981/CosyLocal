@@ -1,5 +1,74 @@
 # Changelog
 
+## 4.13.0 - 2026-11-08
+
+Register map corrections from the 2026-11-08 physics verification (slave
+10, 2.5 s poll, 2026-11-05 08:47 → 11-08 11:43 UTC, 107,586 frames; Shelly
+EM ch1 as independent power meter).
+
+The unique_id of each register sensor (`qsh_modbus_reg_{n}`) and the MQTT
+topics do not change.
+
+### Fixed — data type
+
+- Regs 34 and 35 are now signed int16. At compressor start they read raw
+  64644-65250. As uint16 ×0.1 they showed 6464.4-6525.0. Now they show
+  −89.2 to −28.6. Example: raw 64648 → −88.8.
+- Regs 36, 37, 39, 41, 43, 54, 55 and 56 were already signed int16 (reg 36
+  since the first release, 3.0.0). No change. Raw 65516 on reg 36 → −2.0 °C.
+  If HA shows ≈6553 °C for reg 36, the value does not come from this
+  decoder: look for a second source (a template, a Modbus integration, or a
+  script that reads the CSV `raw` column).
+
+### Changed — names, units, state class
+
+| Reg | Old name | New name | Change |
+|-----|----------|----------|--------|
+| 35 | V4 Inverter | Unknown 35 | % unit removed. Scale ×0.1 kept |
+| 41 | Sump Temp | Compressor Sump Temp | Name only |
+| 48 | Discharge Pressure | Discharge Pressure (gauge) | Name only |
+| 50 | Suction Pressure | Suction Pressure (gauge) | Name only |
+| 55 | Unknown Temp 55 | Suction Superheat (calc) | Unit °C → K. Device class temperature removed (it is a difference) |
+| 56 | Saturated Condensing Temp | Saturated Condensing Temp (calc) | Name only |
+| 57 | Saturated Evaporating Temp | Saturated Evaporating Temp (calc) | Name only |
+| 58 | Defrost Te Threshold (hypothesis) | Defrost Te Threshold | CONFIRMED (3 of 3 defrosts). state_class removed |
+
+- `state_class: measurement` added to regs 19, 24, 28, 32, 34, 35, 51, 62,
+  66 and 77. Regs with a device class keep it. Regs 58 and 60 have no
+  state class.
+- `REGISTER_NAMES` key `"state_class": None` now removes the state class.
+- New function `decode_register()` (int16 if signed, then scale). The
+  MQTT publisher uses it.
+
+### Added
+
+- `tests/test_decoder.py`: decoder and discovery tests
+  (`python3 -m unittest discover -s tests -v`).
+- `tools/cosy_ha_migrate.py`: HA entity_id migration. `grep` finds old
+  entity_ids in the HA config; `rename` renames them in the entity
+  registry (reg 24 before reg 50); `verify` checks the result. Python
+  standard library only.
+- `homeassistant/packages/cosy_derived.yaml`: template entities
+  `binary_sensor.hub_cosy_hp_cosy_defrost_active` (reg 65 in 6, 7, 8),
+  `sensor.hub_cosy_hp_cosy_defrost_margin` (reg 57 − reg 58, K) and
+  `sensor.hub_cosy_hp_cosy_hp_controller_state_text`.
+
+### Upgrade notes
+
+1. **Order.** Update the add-on. Then run `tools/cosy_ha_migrate.py grep`
+   on the HA config BEFORE the rename, and keep the output. Then
+   `rename`, then install the template package, then `verify`.
+2. **Reg 24 and reg 50.** After the rename,
+   `sensor.hub_cosy_hp_cosy_suction_pressure` is reg 50 (real suction
+   pressure). Before, it was reg 24. Check each reference that the grep
+   found for this entity_id.
+3. **Recorder exclude.** Remove regs 51, 52, 58 and 66 (old entity_ids
+   `..._modbus_reg_51`, `_52`, `_58`, `_66`) from the recorder exclude.
+4. **Long-term statistics.** HA can raise a Repairs issue for reg 55
+   (unit changed) and reg 58 (state class removed). The old reg 55
+   statistics are °C of a different quantity: delete them.
+5. **QSH.** `qsh.yaml` is not changed. QSH mapping is a separate change.
+
 ## 4.12.0 - 2026-10-17
 
 ### Breaking
